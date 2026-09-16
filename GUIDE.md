@@ -17,6 +17,18 @@ Le site est livré privé, réservé à son propriétaire. L’administrateur do
 
 ## Saisir les heures
 
+### Sélectionner une plage dans le calendrier
+
+L’application s’ouvre maintenant sur **Calendrier**. Sur PC, la semaine du lundi au dimanche est affichée. Cliquez-glissez dans la colonne d’un jour : chaque case représente 15 minutes. La plage surlignée affiche les horaires retenus ; relâchez pour ouvrir la fenêtre de saisie. Un simple clic prépare une prestation de 15 minutes. Le bouton **Prestation** permet aussi d’ouvrir directement le formulaire.
+
+Sur téléphone, sélectionnez le jour en haut, touchez le premier puis le dernier quart d’heure de votre intervention. La fenêtre s’ouvre après le deuxième appui. Pour un seul quart d’heure, touchez deux fois la même case ou utilisez **Continuer** après le premier appui. Le défilement vertical reste disponible entre les deux appuis. Les horaires préremplis restent ajustables dans la fenêtre.
+
+Choisissez le client, indiquez le numéro de ticket et éventuellement une description, puis cliquez sur **Enregistrer la prestation**. La prestation apparaît dans le calendrier et reste accessible dans le relevé et les exports de l’onglet **Prestations**. Les nouvelles saisies sont toujours attribuées à la personne connectée, même lorsque l’administrateur affiche un autre partenaire ou toute l’équipe.
+
+Cliquez sur un bloc existant pour le modifier. Les prestations déjà facturées s’ouvrent en lecture seule. Les horaires exacts d’anciennes prestations restent conservés, même s’ils ne correspondent pas à un quart d’heure. La navigation propose les semaines précédente/suivante, **Aujourd’hui** et une date au choix. Les jours futurs ne permettent pas de saisie.
+
+Au clavier : Tab pour atteindre la grille, flèches pour se déplacer, Maj + flèche haut/bas pour étendre la plage, Entrée pour ouvrir la saisie et Échap pour annuler une sélection. La fenêtre conserve les champs en cas d’erreur et demande confirmation avant d’abandonner des modifications.
+
 Les heures sont les heures civiles de Bruxelles. Le téléphone ne les convertit pas automatiquement. La fin **00:00** signifie minuit à la fin de la date sélectionnée et apparaît comme **24:00** sur le relevé. Pour une intervention de 23:00 à 01:00, saisissez 23:00–00:00 le premier jour et 00:00–01:00 le lendemain. Lors des changements d’heure saisonniers, vérifiez votre saisie : le calcul porte sur les heures civiles, pas sur la durée chronométrique.
 
 Une prestation de 16 minutes donne 30 minutes facturables. Chaque ligne est arrondie séparément au quart d’heure supérieur. Le relevé conserve les minutes réelles et arrondies. Les dates futures et les chevauchements d’une même personne sont refusés.

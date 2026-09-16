@@ -1,9 +1,10 @@
 'use client';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowDownToLine, ArrowLeft, ArrowRight, Building2, Check, CheckCheck, ChevronRight, Clock3, FileText, HelpCircle, LayoutList, LockKeyhole, LogOut, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, Users, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowLeft, ArrowRight, Building2, CalendarDays, Check, CheckCheck, ChevronRight, Clock3, FileText, HelpCircle, LayoutList, LockKeyhole, LogOut, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, Users, X } from 'lucide-react';
 import { billedMinutes, brusselsToday, clockTime, duration, parseTime, validDate } from '@/lib/business';
 import { registerPageTools } from '@/lib/webmcp';
 import type { Entry, State } from '@/lib/types';
+import TimeCalendar from './time-calendar';
 
 type Filters = { from: string; to: string; client: string; member: string; status: string; q: string };
 type EntryForm = { id: string; version?: number; client_id: string; ticket: string; date: string; start: string; end: string; description: string };
@@ -14,7 +15,7 @@ const dateLabel = (date: string) => new Date(date + 'T12:00:00').toLocaleDateStr
 
 export default function Workspace() {
   const [data, setData] = useState<State | null>(null);
-  const [tab, setTab] = useState('entries');
+  const [tab, setTab] = useState('calendar');
   const [filters, setFilters] = useState(initialFilters);
   const [draftFilters, setDraftFilters] = useState(initialFilters);
   const [form, setForm] = useState<EntryForm>(freshForm);
@@ -135,13 +136,15 @@ export default function Workspace() {
 
   return <div className="app-shell">
     <aside className="sidebar"><a className="brand" href="/"><span className="brand-icon"><Clock3 /></span><span>sumatoni<span className="brand-sub">TIME</span></span></a><a className="mobile-signout" aria-label="Se déconnecter" href="/signout-with-chatgpt?return_to=/" target="_top"><LogOut size={20} /></a><span className="nav-caption">VOTRE ESPACE</span><nav aria-label="Navigation principale">
+      <button className={tab === 'calendar' ? 'active' : ''} onClick={() => setTab('calendar')}><CalendarDays size={20} /><span>Calendrier</span></button>
       <button className={tab === 'entries' ? 'active' : ''} onClick={() => setTab('entries')}><LayoutList size={20} /><span>Prestations</span><ChevronRight className="nav-chevron" size={16} /></button>
       {isAdmin && <><button className={tab === 'clients' ? 'active' : ''} onClick={() => setTab('clients')}><Building2 size={20} /><span>Clients</span></button><button className={tab === 'team' ? 'active' : ''} onClick={() => setTab('team')}><Users size={20} /><span>Équipe</span></button></>}
       <button className={tab === 'help' ? 'active' : ''} onClick={() => setTab('help')}><HelpCircle size={20} /><span>Guide pratique</span></button>
     </nav><div className="sidebar-note"><div className="tiny-clock"><Clock3 size={19} /></div><strong>Précis à la minute.<br />Facturé au quart d’heure.</strong><p>Vos horaires réels sont toujours conservés.</p><span>BRUXELLES · EUROPE</span></div><div className="profile"><span className="avatar">{data.me.name.slice(0, 2).toUpperCase()}</span><div><strong>{data.me.name}</strong><small>{isAdmin ? 'Administrateur' : 'Partenaire'}</small></div><a aria-label="Se déconnecter" title="Se déconnecter" href="/signout-with-chatgpt?return_to=/" target="_top"><LogOut size={18} /></a></div></aside>
     <main className="main-content"><header className="topbar"><span>ESPACE DE TRAVAIL <span className="slash">/</span> <strong>SUMATONI</strong></span><span className="role"><ShieldCheck size={16} />{isAdmin ? 'Vue administrateur' : 'Espace partenaire'}</span></header>
-    <div className="page-content">{feedback}<div className="page-heading"><div><span className="eyebrow">{tab === 'entries' ? 'DU TEMPS SAISI AU TEMPS FACTURÉ' : 'VOTRE ESPACE SUMATONI'}</span><h1>{({ entries: 'Prestations', clients: 'Vos clients', team: 'Votre équipe', help: 'Guide pratique' } as Record<string, string>)[tab]}</h1><p>{tab === 'entries' ? (isAdmin ? 'Un relevé clair pour vous et vos partenaires.' : 'Vos interventions et votre temps facturable, au même endroit.') : tab === 'clients' ? 'Un répertoire commun pour des relevés cohérents.' : tab === 'team' ? 'Chaque partenaire dispose de son propre accès.' : 'Quelques repères pour aller à l’essentiel.'}</p></div><button className="secondary refresh" disabled={loading || busy} onClick={() => { setError(''); void reload(); }}><RefreshCw size={16} className={loading ? 'spinning' : ''} />Actualiser</button></div>
+    <div className="page-content">{feedback}<div className="page-heading"><div><span className="eyebrow">{tab === 'entries' ? 'DU TEMPS SAISI AU TEMPS FACTURÉ' : 'VOTRE ESPACE SUMATONI'}</span><h1>{({ calendar: 'Calendrier', entries: 'Prestations', clients: 'Vos clients', team: 'Votre équipe', help: 'Guide pratique' } as Record<string, string>)[tab]}</h1><p>{tab === 'calendar' ? 'Sélectionnez votre plage horaire. Complétez votre prestation.' : tab === 'entries' ? (isAdmin ? 'Un relevé clair pour vous et vos partenaires.' : 'Vos interventions et votre temps facturable, au même endroit.') : tab === 'clients' ? 'Un répertoire commun pour des relevés cohérents.' : tab === 'team' ? 'Chaque partenaire dispose de son propre accès.' : 'Quelques repères pour aller à l’essentiel.'}</p></div><button className="secondary refresh" disabled={loading || busy} onClick={() => { setError(''); void reload(); }}><RefreshCw size={16} className={loading ? 'spinning' : ''} />Actualiser</button></div>
 
+    {tab === 'calendar' && <TimeCalendar data={data} onSaved={() => void reload()} />}
     {tab === 'entries' && <>
       <div className="stats"><div className="stat"><span><Clock3 size={17} />Temps réel</span><strong>{duration(real)}</strong><small>Heures de début et de fin conservées</small></div><div className="stat"><span><FileText size={17} />Temps facturable</span><strong>{duration(bill)}</strong><small>Arrondi à 15 min par prestation</small></div><div className="stat stat-accent"><span><ArrowDownToLine size={17} />Reste à facturer</span><strong>{duration(open)}</strong><small>{rows.filter(e => !e.billed).length} prestation{rows.filter(e => !e.billed).length > 1 ? 's' : ''} dans la sélection</small></div></div>
       <div className="work-grid"><section className="entry-panel panel" aria-labelledby="entry-title"><div className="panel-heading"><span className="square-icon"><Plus size={20} /></span><h2 id="entry-title">{form.version ? 'Modifier la prestation' : 'Nouvelle prestation'}</h2></div>
@@ -179,5 +182,3 @@ export default function Workspace() {
     <footer className="page-footer"><span>sumatoni <strong>TIME</strong></span><span>Le temps enregistré. La facturation simplifiée.</span></footer></div></main>
   </div>;
 }
-
-

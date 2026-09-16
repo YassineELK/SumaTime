@@ -85,3 +85,11 @@ Le code, les migrations et le guide sont livrés avec le produit. La persistance
 ## 10. Périmètre de cette livraison
 
 Application fonctionnelle, document d’architecture, guide de démarrage et d’exploitation, contrôles métier et droits, exports CSV. Les tarifs, la TVA, les pièces jointes, l’import automatique de tickets, le chronomètre, le fonctionnement hors connexion et les intégrations ERP restent hors périmètre.
+
+## 11. Évolution : saisie par calendrier
+
+La vue d’accueil devient un calendrier hebdomadaire sur PC, avec une journée sélectionnée sur téléphone. Une grille de 96 créneaux par jour permet une sélection de durée par multiples de 15 minutes. Le clic-glissé à la souris, deux appuis tactiles ou la navigation clavier ouvrent une fenêtre accessible avec client, ticket, date, horaires et description. Le relevé et ses exports restent accessibles dans Prestations.
+
+Le calendrier recharge uniquement la semaine affichée et respecte les mêmes droits côté serveur. Il affiche le calendrier personnel par défaut ; l’administrateur peut sélectionner un partenaire ou toute l’équipe. Les blocs simultanés sont disposés côte à côte. La création reste attribuée au membre connecté ; une modification conserve le propriétaire initial. Les blocs facturés sont consultables en lecture seule.
+
+Cette évolution réutilise l’API existante : pas de nouvelle table, de migration de données ou de modification des règles de facturation. Les sélections utilisent les heures civiles de Bruxelles ; les dates sont calculées sans dépendance au fuseau de l’appareil. Les heures exactes des prestations déjà enregistrées sont conservées. Les contrôles de chevauchement et de version restent autoritaires sur le serveur.

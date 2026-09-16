@@ -27,3 +27,9 @@ La recette complète nécessite une base de test vide. Appliquer les migrations 
 ## Limites explicites
 
 La recette ne remplace pas un test de charge, un audit de sécurité indépendant ou un exercice de restauration. L’authentification et l’accès de partenaires externes sur le site hébergé dépendent de la configuration et des droits de partage Sites. L’application est initialement publiée en accès privé ; le parcours d’un partenaire réel sera possible après son autorisation et l’ouverture de l’accès au site.
+
+## Évolution calendrier
+
+Tests automatisés ajoutés dans `tests/calendar.test.mjs` : semaine du lundi au dimanche, passage de mois/année et changements d’heure, sélection avant/arrière, quart d’heure unique, fin à minuit, bornage du pointeur, distinction des membres et dates pour les chevauchements, disposition des blocs simultanés et des prestations très courtes. Les tests existants de calcul et de CSV sont conservés. Aucun changement de schéma ni de droits API.
+
+Validation de cette évolution : vérification TypeScript, sept tests métier/calendrier et compilation de production. Chargement HTTP de l’aperçu vérifié. Les gestes souris/tactiles de cette évolution n’ont pas fait l’objet d’une recette manuelle dans un navigateur piloté.
