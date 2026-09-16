@@ -23,6 +23,7 @@ export function sqlite() {
     if (!travelColumns.some(column => column.name === 'anchor_entry_id')) db.exec(readFileSync(resolve('drizzle/0003_travel_anchor.sql'), 'utf8'));
     const clientColumns = db.prepare('PRAGMA table_info(clients)').all() as { name: string }[];
     if (!clientColumns.some(column => column.name === 'color')) db.exec(readFileSync(resolve('drizzle/0004_client_color.sql'), 'utf8'));
+    if (!clientColumns.some(column => column.name === 'glpi_entity_id')) db.exec(readFileSync(resolve('drizzle/0005_provider_workspace.sql'), 'utf8'));
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }
   db.exec(`CREATE TABLE IF NOT EXISTS accounts (

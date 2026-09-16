@@ -134,3 +134,15 @@ L’application reprend la police Poppins, les logos originaux et la palette du 
 ## 17. Couleur par client
 
 Migration additive `0004_client_color.sql` : couleur nullable sur `clients`, au format strict `#RRGGBB`, normalisée en majuscules par l’API. Seul un administrateur peut modifier ce réglage partagé ; les partenaires reçoivent la couleur en lecture avec le répertoire clients. Valeur nulle = styles Sumatoni par défaut. Le calendrier utilise la couleur actuelle du client pour les anciennes et nouvelles prestations, sans modifier les enregistrements de temps. L’application affiche un fond teinté clair, une bordure colorée et un texte foncé ; la facturation reste identifiée par un cadenas. Aucun changement dans les exports.
+
+## 17. Espace prestataire et intégration GLPI
+
+La version 0.2 ajoute les parcours documentés dans [Évolution prestataire](docs/EVOLUTION-V0.2.0.md). L’accueil est personnel même pour l’administrateur ; les données de vente ne sont pas exposées aux partenaires par l’API workday.
+
+La migration 0005 ajoute work_timers (un chronomètre par membre), timer_receipts (rejeu idempotent après enregistrement), glpi_credentials (jeton personnel chiffré) et clients.glpi_entity_id (association unique nullable). Les migrations sont exécutées au démarrage par db/raw.ts ; les schémas Drizzle historiques ne pilotent pas le déploiement. Ne pas utiliser db:generate pour appliquer ces migrations opérationnelles.
+
+Le chronomètre utilise des instants serveur, convertis en heures civiles Europe/Brussels. Les intervalles englobent les minutes réelles. Les jours traversés sont enregistrés dans une seule transaction après vérification ; un conflit annule toutes les écritures. Un changement d’heure ou une durée supérieure à 24 heures impose une saisie manuelle. Le tarif et le forfait sont repris au moment de l’enregistrement ; les règles de verrouillage et de forfait journalier restent communes au relevé.
+
+La saisie rapide conserve un brouillon localStorage par membre. Il n’est pas synchronisé ni une sauvegarde serveur. Le chronomètre, au contraire, persiste en SQLite et peut être retrouvé sur un autre appareil après connexion.
+
+Le connecteur GLPI est configuré uniquement côté serveur et utilise l’API historique V1 en lecture seule. Chaque demande ouvre une session avec le jeton personnel, respecte les droits GLPI et ferme la session. Les secrets sont liés au membre et à l’URL via AES-GCM. La clé glpi-key est sauvegardée avec la base. La procédure, les limites et la validation du contrat HTTP sont précisées dans [GLPI](docs/GLPI.md).

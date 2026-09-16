@@ -48,4 +48,9 @@ next-env.d.ts
 
 /data/
 /backups/
+**/glpi-key
+*.glpi-key
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 !.env.example

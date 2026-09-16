@@ -7,8 +7,12 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowDownToLine, ArrowLeft, ArrowRight, Building2, CalendarDays, Check, CheckCheck, ChevronRight, Clock3, FileText, HelpCircle, LayoutList, LockKeyhole, LogOut, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, Users, X } from 'lucide-react';
 import { billedMinutes, brusselsToday, clockTime, duration, locationLabel, parseTime, validDate } from '@/lib/business';
 import { registerPageTools } from '@/lib/webmcp';
-import type { Entry, State } from '@/lib/types';
+import type { Entry, EntrySeed, State, Workday } from '@/lib/types';
 import TimeCalendar from './time-calendar';
+import WorkdayPanel, { TimerStrip, TimerReview } from './workday-panel';
+import QuickEntry, { readDraft } from './quick-entry';
+import GlpiPanel, { ClientGlpi } from './glpi-panel';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import AccountPanel, { Logout } from './account-panel';
 import TeamPanel from './team-panel';
 import { ClientRates } from './billing-settings';
@@ -23,7 +27,7 @@ const dateLabel = (date: string) => new Date(date + 'T12:00:00').toLocaleDateStr
 
 export default function Workspace() {
   const [data, setData] = useState<State | null>(null);
-  const [tab, setTab] = useState('calendar');
+  const [tab, setTab] = useState('day');
   const [filters, setFilters] = useState(initialFilters);
   const [draftFilters, setDraftFilters] = useState(initialFilters);
   const [form, setForm] = useState<EntryForm>(freshForm);
@@ -33,6 +37,15 @@ export default function Workspace() {
   const [notice, setNotice] = useState('');
   const [clientName, setClientName] = useState('');
   const [page, setPage] = useState(0);
+  const [work, setWork] = useState<Workday | null>(null);
+  const [workError, setWorkError] = useState('');
+  const [workLoading, setWorkLoading] = useState(false);
+  const [timerBusy, setTimerBusy] = useState(false);
+  const [timerError, setTimerError] = useState('');
+  const [review, setReview] = useState(false);
+  const [quick, setQuick] = useState<{ seed: EntrySeed | null; mode: 'entry' | 'timer' } | null>(null);
+  const [pendingQuick, setPendingQuick] = useState<{ seed: EntrySeed; mode: 'entry' | 'timer' } | null>(null);
+  const workSequence = useRef(0);
   const sequence = useRef(0);
   const ticketInput = useRef<HTMLInputElement>(null);
   const currentState = useRef({ data, filters, form });
@@ -102,6 +115,37 @@ export default function Workspace() {
     } catch (e) { setError(e instanceof Error ? e.message : 'Enregistrement non confirmé. Vérifiez votre connexion et réessayez.'); return false; }
     finally { setBusy(false); }
   }
+  const loadWork = useCallback(async () => {
+    const id = ++workSequence.current; setWorkLoading(true);
+    try { const response = await fetch('/api/workday', { cache: 'no-store' }); const value = await response.json() as Workday & { error?: string }; if (!response.ok) throw new Error(value.error); if (id === workSequence.current) { setWork(value); setWorkError(''); } }
+    catch (e) { if (id === workSequence.current) setWorkError(e instanceof Error ? e.message : 'Votre journée ne peut pas être actualisée.'); }
+    finally { if (id === workSequence.current) setWorkLoading(false); }
+  }, []);
+  useEffect(() => {
+    if (!data?.me || data.me.must_change) return;
+    void loadWork();
+    const focus = () => { if (document.visibilityState === 'visible') void loadWork(); };
+    window.addEventListener('focus', focus); document.addEventListener('visibilitychange', focus);
+    const timer = setInterval(focus, 30000);
+    return () => { window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus); clearInterval(timer); };
+  }, [data, loadWork]);
+  const openQuick = useCallback((seed: EntrySeed | null = null, mode: 'entry' | 'timer' = 'entry') => {
+    if (mode === 'entry' && seed && data?.me && readDraft(data.me.id)) { setPendingQuick({ seed, mode }); return; }
+    setQuick({ seed, mode });
+  }, [data?.me]);
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if (!data?.me || data.me.must_change || event.key.toLowerCase() !== 'n' || event.ctrlKey || event.altKey || event.metaKey || event.repeat || quick || review || document.querySelector('[role="dialog"]') || (event.target instanceof HTMLElement && (event.target.isContentEditable || ['INPUT','SELECT','TEXTAREA','BUTTON'].includes(event.target.tagName)))) return;
+      event.preventDefault(); openQuick();
+    }; window.addEventListener('keydown', shortcut); return () => window.removeEventListener('keydown', shortcut);
+  }, [data?.me, quick, review, openQuick]);
+  async function timerAction(action: string, extra: object = {}) {
+    if (!work?.timer || timerBusy) return false;
+    setTimerBusy(true); setTimerError('');
+    try { const response = await fetch('/api/workday', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, id: work.timer.id, version: work.timer.version, ...extra }) }); const value = await response.json() as { error?: string }; if (!response.ok) throw new Error(value.error); await loadWork(); if (action === 'stop') setReview(true); if (action === 'save') { setNotice('Intervention enregistrée dans votre relevé.'); await reload(); } if (action === 'discard') setNotice('Chronomètre supprimé.'); return true; }
+    catch (e) { setTimerError(e instanceof Error ? e.message : 'Action non confirmée. Réessayez.'); return false; }
+    finally { setTimerBusy(false); }
+  }
   const isAdmin = data?.me?.role === 'admin';
   const rows = data?.entries || [];
   const real = rows.reduce((sum, e) => sum + e.end - e.start, 0);
@@ -149,6 +193,8 @@ export default function Workspace() {
 
   return <div className="app-shell">
     <aside className="sidebar"><a className="brand" href="/"><Brand /></a><Logout className="mobile-signout"><LogOut size={20} /></Logout><span className="nav-caption">VOTRE ESPACE</span><nav aria-label="Navigation principale">
+      <button className={tab === 'day' ? 'active' : ''} onClick={() => setTab('day')}><Clock3 size={20} /><span>Ma journée</span></button>
+      <button className={tab === 'tickets' ? 'active' : ''} onClick={() => setTab('tickets')}><FileText size={20} /><span>Mes tickets GLPI</span></button>
       <button className={tab === 'calendar' ? 'active' : ''} onClick={() => setTab('calendar')}><CalendarDays size={20} /><span>Calendrier</span></button>
       <button className={tab === 'entries' ? 'active' : ''} onClick={() => setTab('entries')}><LayoutList size={20} /><span>Prestations</span><ChevronRight className="nav-chevron" size={16} /></button>
       {isAdmin && <><button className={tab === 'clients' ? 'active' : ''} onClick={() => setTab('clients')}><Building2 size={20} /><span>Clients</span></button><button className={tab === 'team' ? 'active' : ''} onClick={() => setTab('team')}><Users size={20} /><span>Équipe</span></button></>}
@@ -156,8 +202,15 @@ export default function Workspace() {
       <button className={tab === 'help' ? 'active' : ''} onClick={() => setTab('help')}><HelpCircle size={20} /><span>Guide pratique</span></button>
     </nav><div className="sidebar-note"><div className="tiny-clock"><Clock3 size={19} /></div><strong>Précis à la minute.<br />Facturé au quart d’heure.</strong><p>Vos horaires réels sont toujours conservés.</p><span>BRUXELLES · EUROPE</span></div><div className="profile"><span className="avatar">{data.me.name.slice(0, 2).toUpperCase()}</span><div><strong>{data.me.name}</strong><small>{isAdmin ? 'Administrateur' : 'Partenaire'}</small></div><Logout className="icon-button"><LogOut size={18} /></Logout></div></aside>
     <main className="main-content"><header className="topbar"><span>ESPACE DE TRAVAIL <span className="slash">/</span> <strong>SUMATONI</strong></span><span className="role"><ShieldCheck size={16} />{isAdmin ? 'Vue administrateur' : 'Espace partenaire'}</span></header>
-    <div className="page-content">{feedback}<div className="page-heading"><div><span className="eyebrow">{tab === 'entries' ? 'DU TEMPS SAISI AU TEMPS FACTURÉ' : 'VOTRE ESPACE SUMATONI'}</span><h1>{({ calendar: 'Calendrier', entries: 'Prestations', clients: 'Vos clients', team: 'Votre équipe', help: 'Guide pratique', account: 'Mon compte' } as Record<string, string>)[tab]}</h1><p>{tab === 'calendar' ? 'Sélectionnez votre plage horaire. Complétez votre prestation.' : tab === 'entries' ? (isAdmin ? 'Un relevé clair pour vous et vos partenaires.' : 'Vos interventions et votre temps facturable, au même endroit.') : tab === 'clients' ? 'Un répertoire commun pour des relevés cohérents.' : tab === 'team' ? 'Chaque partenaire dispose de son propre accès.' : 'Quelques repères pour aller à l’essentiel.'}</p></div><button className="secondary refresh" disabled={loading || busy} onClick={() => { setError(''); void reload(); }}><RefreshCw size={16} className={loading ? 'spinning' : ''} />Actualiser</button></div>
+    <div className="page-content">{feedback}<div className="page-heading"><div><span className="eyebrow">{tab === 'entries' ? 'DU TEMPS SAISI AU TEMPS FACTURÉ' : 'VOTRE ESPACE SUMATONI'}</span><h1>{({ day: 'Ma journée', tickets: 'Mes tickets GLPI', calendar: 'Calendrier', entries: 'Prestations', clients: 'Vos clients', team: 'Votre équipe', help: 'Guide pratique', account: 'Mon compte' } as Record<string, string>)[tab]}</h1><p>{tab === 'day' ? 'Votre temps, vos tickets et vos interventions du jour.' : tab === 'tickets' ? 'Préparez vos prestations depuis les tickets auxquels vous avez accès.' : tab === 'calendar' ? 'Sélectionnez votre plage horaire. Complétez votre prestation.' : tab === 'entries' ? (isAdmin ? 'Un relevé clair pour vous et vos partenaires.' : 'Vos interventions et votre temps facturable, au même endroit.') : tab === 'clients' ? 'Un répertoire commun pour des relevés cohérents.' : tab === 'team' ? 'Chaque partenaire dispose de son propre accès.' : 'Quelques repères pour aller à l’essentiel.'}</p></div><button className="secondary refresh" disabled={loading || busy} onClick={() => { setError(''); void reload(); void loadWork(); }}><RefreshCw size={16} className={loading ? 'spinning' : ''} />Actualiser</button></div>
 
+    {work?.timer && <TimerStrip work={work} busy={timerBusy} onReview={() => { setTimerError(''); setReview(true); }} onStop={() => void timerAction('stop')} />}
+    {timerError && !review && <div className="alert error" role="alert">{timerError}</div>}
+    {tab === 'day' && <WorkdayPanel data={data} work={work} loading={workLoading} error={workError} onQuick={openQuick} onCalendar={() => setTab('calendar')} onTickets={() => setTab('tickets')} onEdit={edit} onClients={() => setTab('clients')} />}
+    {tab === 'tickets' && <GlpiPanel data={data} timerPresent={!!work?.timer} onQuick={openQuick} />}
+    {pendingQuick && <Dialog open onOpenChange={open => { if (!open) setPendingQuick(null); }}><DialogContent className="calendar-dialog quick-dialog"><DialogTitle>Un brouillon vous attend</DialogTitle><DialogDescription>Vous avez déjà commencé une prestation sur cet appareil. Reprenez-la ou remplacez-la par le ticket sélectionné.</DialogDescription><div className="quick-actions"><button className="secondary" onClick={() => { setPendingQuick(null); setQuick({ seed: null, mode: 'entry' }); }}>Reprendre le brouillon</button><button className="primary" onClick={() => { setQuick(pendingQuick); setPendingQuick(null); }}>Remplacer le brouillon</button></div></DialogContent></Dialog>}
+    {quick && <QuickEntry data={data} seed={quick.seed} mode={quick.mode} onClose={() => setQuick(null)} onSaved={message => { setNotice(message); void reload(); void loadWork(); }} />}
+    {review && work?.timer?.stopped_at && <TimerReview key={work.timer.id} work={work} busy={timerBusy} error={timerError} onClose={() => setReview(false)} onAction={timerAction} />}
     {tab === 'calendar' && <TimeCalendar data={data} onSaved={() => void reload()} />}
     {tab === 'entries' && <>
       <div className="stats"><div className="stat"><span><Clock3 size={17} />Temps réel</span><strong>{duration(real)}</strong><small>Heures de début et de fin conservées</small></div><div className="stat"><span><FileText size={17} />Temps facturable</span><strong>{duration(bill)}</strong><small>Arrondi à 15 min par prestation</small></div><div className="stat stat-accent"><span><ArrowDownToLine size={17} />Reste à facturer</span><strong>{duration(open)}</strong><small>{rows.filter(e => !e.billed).length} prestation{rows.filter(e => !e.billed).length > 1 ? 's' : ''} dans la sélection</small></div></div>
@@ -182,7 +235,7 @@ export default function Workspace() {
       </section></div><div className="bottom-note"><ShieldCheck size={15} /><span>{isAdmin ? 'Vous consultez les prestations de toute votre équipe.' : 'Seules vos prestations sont visibles dans cet espace.'} Les exports respectent vos filtres.</span></div>
     </>}
 
-    {tab === 'clients' && isAdmin && <div className="management-grid"><section className="panel management-form"><span className="square-icon"><Building2 size={20} /></span><h2>Ajouter un client</h2><p>Un nom commun à toute l’équipe, pour retrouver facilement chaque prestation.</p><form onSubmit={async e => { e.preventDefault(); if (await act({ action: 'client', name: clientName }, 'Client ajouté. Vous pouvez saisir une prestation.')) setClientName(''); }}><label>Nom du client<input required maxLength={120} value={clientName} onChange={e => setClientName(e.target.value)} placeholder="Nom de l’entreprise" /></label><button className="primary full" disabled={busy}><Plus size={18} />Ajouter le client</button></form></section><section className="panel management-list"><div className="panel-heading"><h2>Répertoire clients</h2><span className="count">{data.clients.length}</span></div>{!data.clients.length && <div className="empty"><Building2 size={30} /><h3>Votre répertoire est prêt.</h3><p>Ajoutez votre premier client avec le formulaire.</p></div>}{data.clients.map(c => <div key={c.id}><div className="management-row"><span className="client-monogram">{c.name.slice(0, 2).toUpperCase()}</span><div><strong>{c.name}</strong><small>{c.active ? 'Disponible pour la saisie' : 'Archivé · Historique conservé'}</small></div><button className="secondary" disabled={busy} onClick={() => void act({ action: 'clientActive', id: c.id, active: !c.active }, c.active ? 'Client archivé. Son historique est conservé.' : 'Client réactivé.')}>{c.active ? 'Archiver' : 'Réactiver'}</button></div><ClientColor client={c} onSaved={() => void reload()} /><ClientRates client={c} onSaved={() => void reload()} /></div>)}</section></div>}
+    {tab === 'clients' && isAdmin && <div className="management-grid"><section className="panel management-form"><span className="square-icon"><Building2 size={20} /></span><h2>Ajouter un client</h2><p>Un nom commun à toute l’équipe, pour retrouver facilement chaque prestation.</p><form onSubmit={async e => { e.preventDefault(); if (await act({ action: 'client', name: clientName }, 'Client ajouté. Vous pouvez saisir une prestation.')) setClientName(''); }}><label>Nom du client<input required maxLength={120} value={clientName} onChange={e => setClientName(e.target.value)} placeholder="Nom de l’entreprise" /></label><button className="primary full" disabled={busy}><Plus size={18} />Ajouter le client</button></form></section><section className="panel management-list"><div className="panel-heading"><h2>Répertoire clients</h2><span className="count">{data.clients.length}</span></div>{!data.clients.length && <div className="empty"><Building2 size={30} /><h3>Votre répertoire est prêt.</h3><p>Ajoutez votre premier client avec le formulaire.</p></div>}{data.clients.map(c => <div key={c.id}><div className="management-row"><span className="client-monogram">{c.name.slice(0, 2).toUpperCase()}</span><div><strong>{c.name}</strong><small>{c.active ? 'Disponible pour la saisie' : 'Archivé · Historique conservé'}</small></div><button className="secondary" disabled={busy} onClick={() => void act({ action: 'clientActive', id: c.id, active: !c.active }, c.active ? 'Client archivé. Son historique est conservé.' : 'Client réactivé.')}>{c.active ? 'Archiver' : 'Réactiver'}</button></div><ClientColor client={c} onSaved={() => void reload()} /><ClientRates client={c} onSaved={() => void reload()} /><ClientGlpi client={c} onSaved={() => void reload()} /></div>)}</section></div>}
 
     {tab === 'team' && isAdmin && <TeamPanel data={data} reload={() => void reload()} toggle={(id, active) => { void act({ action: 'memberActive', id, active }, active ? 'Accès réactivé.' : 'Accès désactivé.'); }} />}
     {tab === 'account' && <AccountPanel me={data.me} onDone={() => void reload()} />}
@@ -193,7 +246,10 @@ export default function Workspace() {
       ['03', 'Préparer votre facturation', 'Choisissez une période, un client, un partenaire ou un statut, puis cliquez sur Appliquer. Exportez le CSV détaillé pour les justificatifs, la synthèse par client ou le relevé partenaire pour comparer les temps et déplacements à sa facture. Les fichiers s’ouvrent dans Excel.'],
       ['04', 'Conserver un relevé fiable', 'Après facturation, l’administrateur peut verrouiller chaque ligne avec la double coche. Les prestations facturées ne sont plus modifiables. Exporter seul ne modifie aucun statut. Le bouton Rouvrir permet une correction explicite.'],
       ['05', 'Travailler avec vos partenaires', 'L’administrateur crée les comptes dans Équipe. Un compte local utilise l’e-mail et un mot de passe provisoire à changer à la première connexion. Un compte AD / LDAP utilise son identifiant annuaire, une fois le connecteur configuré. Aucun e-mail automatique n’est envoyé.'],
-      ['06', 'En cas de doute', 'La connexion Internet est nécessaire. En cas d’erreur, les champs restent présents : réessayez sans fermer la page. Un chevauchement avec une autre prestation est refusé. Actualisez pour retrouver les dernières modifications.'],
+      ['06', 'En cas de doute', 'Une connexion au serveur est nécessaire. En cas d’erreur, les champs restent présents : réessayez sans fermer la page. Un chevauchement avec une autre prestation est refusé. Actualisez pour retrouver les dernières modifications.'],
+      ['07', 'Ma journée et mes brouillons', 'Retrouvez vos temps du jour, votre semaine et vos tickets récents dans Ma journée. Ajouter une prestation conserve son brouillon sur cet appareil ; reprenez-le après fermeture de l’onglet. Le raccourci N ouvre la saisie rapide hors des champs. Les formulaires Calendrier et Prestations restent manuels.'],
+      ['08', 'Le chronomètre', 'Démarrez une intervention puis terminez-la pour vérifier les horaires et la description avant de les enregistrer. Le chronomètre reste sur le serveur entre vos appareils. Un seul chrono par compte ; un chevauchement conserve le temps en attente. Au-delà de 24 h ou lors d’un changement d’heure, saisissez les horaires manuellement.'],
+      ['09', 'Les tickets GLPI', 'Une fois le serveur configuré, connectez votre jeton personnel dans Mes tickets GLPI. Recherchez un numéro ou un titre, puis choisissez Saisir du temps ou Chrono. Le client est prérempli seulement si l’entité GLPI est associée dans Clients. Vérifiez le mode Sur site. Aucune prestation n’est envoyée dans GLPI.'],
     ].map(([n, title, body]) => <article className="panel help-card" key={n}><span>{n}</span><h2>{title}</h2><p>{body}</p></article>)}</div>}
     <footer className="page-footer"><Brand /><span>Le temps enregistré. La facturation simplifiée.</span></footer></div></main>
   </div>;

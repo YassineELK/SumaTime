@@ -18,9 +18,27 @@ Chaque partenaire consulte, corrige et exporte uniquement ses propres prestation
 
 ## Saisir les heures
 
+### Ma journée et saisie rapide
+
+L’accueil **Ma journée** montre vos propres interventions, les temps réels et facturables du jour et le temps réel depuis lundi, même pour un administrateur. Les temps du chronomètre en cours ne sont pas encore comptés. Un clic sur une intervention ouvre sa correction dans Prestations. Le calendrier reste accessible dans la navigation.
+
+**Ajouter une prestation** ouvre la saisie rapide. Sur ordinateur, le raccourci **N** fonctionne hors des champs et dialogues. Le brouillon de cette saisie rapide est conservé sur l’appareil et associé au compte ; il peut être repris après fermeture ou rechargement. Il n’est pas synchronisé entre appareils et disparaît si le stockage du navigateur est effacé. Les formulaires historiques Calendrier et Prestations ne bénéficient pas de cette récupération. Les tickets récents préparent une nouvelle prestation en reprenant client, ticket, description et mode ; vérifiez les nouveaux horaires.
+
+### Chronométrer une intervention
+
+Choisissez **Démarrer un chrono**, puis le client, le ticket et le mode. Un seul chronomètre peut être présent par compte. Il est conservé sur le serveur et reste disponible sur un autre appareil après connexion ; fermez librement l’onglet. L’état est actualisé au retour sur la page et toutes les 30 secondes lorsque la page est visible.
+
+**Terminer** arrête le temps et ouvre une vérification : corrigez les horaires et la description, puis enregistrez. **Plus tard** conserve l’intervention arrêtée. Le début est proposé à la minute inférieure, la fin à la minute supérieure, avec une durée minimale d’une minute ; l’arrondi facturable au quart d’heure intervient ensuite. Deux journées traversées produisent deux lignes, enregistrées ensemble. Les déplacements restent comptés une fois par jour, client et prestataire. Les tarifs sont figés à l’enregistrement de la prestation.
+
+Un chevauchement bloque l’enregistrement et conserve le chronomètre. Corrigez les horaires dans la vérification. Si un chronomètre dépasse 24 heures ou traverse un changement d’heure été/hiver, saisissez les horaires réels manuellement dans le calendrier, puis supprimez le chronomètre. Une suppression de chronomètre ne crée aucune prestation.
+
+### Préparer depuis GLPI
+
+**Mes tickets GLPI** permet de chercher un numéro ou un titre, afficher les tickets ouverts ou tous les statuts, puis préparer une saisie ou un chrono. Le client est choisi automatiquement uniquement si l’entité GLPI est explicitement associée à un client actif. Sinon, choisissez-le dans le formulaire. Vérifiez le mode Sur site. Voir [la procédure de connexion GLPI](docs/GLPI.md).
+
 ### Sélectionner une plage dans le calendrier
 
-L’application s’ouvre maintenant sur **Calendrier**. Sur PC, la semaine du lundi au dimanche est affichée. Cliquez-glissez dans la colonne d’un jour : chaque case représente 15 minutes. La plage surlignée affiche les horaires retenus ; relâchez pour ouvrir la fenêtre de saisie. Un simple clic prépare une prestation de 15 minutes. Le bouton **Prestation** permet aussi d’ouvrir directement le formulaire.
+Dans **Calendrier**, la semaine du lundi au dimanche est affichée sur PC. Cliquez-glissez dans la colonne d’un jour : chaque case représente 15 minutes. La plage surlignée affiche les horaires retenus ; relâchez pour ouvrir la fenêtre de saisie. Un simple clic prépare une prestation de 15 minutes. Le bouton **Prestation** permet aussi d’ouvrir directement le formulaire.
 
 Sur téléphone, sélectionnez le jour en haut, touchez le premier puis le dernier quart d’heure de votre intervention. La fenêtre s’ouvre après le deuxième appui. Pour un seul quart d’heure, touchez deux fois la même case ou utilisez **Continuer** après le premier appui. Le défilement vertical reste disponible entre les deux appuis. Les horaires préremplis restent ajustables dans la fenêtre.
 

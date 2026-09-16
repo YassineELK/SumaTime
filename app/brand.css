@@ -83,7 +83,7 @@ button:focus-visible,a:focus-visible,summary:focus-visible{outline-color:var(--b
 .client-color-custom{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .client-color-custom input[type=color]{width:56px;height:44px;min-height:44px;padding:4px;margin:0;cursor:pointer;flex:none}
 .client-color-settings .primary{justify-self:start}
-.calendar-event.has-client-color{background:var(--client-tint);border-color:var(--client-border);border-left-color:var(--client-color);color:#183543}
-.calendar-event.has-client-color:hover{background:var(--client-hover)}
+.calendar-event.has-client-color{background:color-mix(in srgb,var(--client-color) 10%,white);border-color:var(--client-border);border-left-color:var(--client-color);color:#183543}
+.calendar-event.has-client-color:hover{background:color-mix(in srgb,var(--client-color) 18%,white)}
 .calendar-event.has-client-color.is-billed{border-top-style:dashed;border-right-style:dashed;border-bottom-style:dashed}
 @media(max-width:760px){.sidebar{overflow:visible}.sidebar>.brand{width:184px;padding:8px 10px}.sidebar nav button.active{box-shadow:inset 0 -3px var(--accent)}.calendar-day-label.selected-day{box-shadow:inset 0 -3px #08759c;background:#e9f5fb}.page-footer{align-items:center}.dark-brand .sumatoni-wordmark{width:160px}}

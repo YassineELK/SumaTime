@@ -1,6 +1,6 @@
 import { DatabaseSync, backup } from 'node:sqlite';
-import { resolve } from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
+import { resolve, dirname, join } from 'node:path';
+import { existsSync, mkdirSync, copyFileSync, constants } from 'node:fs';
 const source = resolve(process.env.DATABASE_PATH || 'data/timesheet.sqlite');
 if (!existsSync(source)) throw new Error('Database not found');
 mkdirSync('backups', { recursive: true });
@@ -9,4 +9,8 @@ const db = new DatabaseSync(source, { readOnly: true });
 await backup(db, target); db.close();
 const check = new DatabaseSync(target, { readOnly: true });
 if (check.prepare('PRAGMA integrity_check').get().integrity_check !== 'ok') throw new Error('Backup verification failed');
-check.close(); console.log('Verified backup:', target);
+check.close();
+const key = join(dirname(source), 'glpi-key');
+if (existsSync(key)) copyFileSync(key, target + '.glpi-key', constants.COPYFILE_EXCL);
+console.log('Verified backup:', target);
+if (existsSync(key)) console.log('GLPI encryption key saved alongside the database. Protect both files.');

@@ -7,6 +7,7 @@ export const members = sqliteTable('members', {
 }, t => [uniqueIndex('members_email_unique').on(t.email), uniqueIndex('members_user_unique').on(t.userId)]);
 export const clients = sqliteTable('clients', {
   color: text('color'),
+  glpiEntityId: integer('glpi_entity_id'),
   hourlyRateCents: integer('hourly_rate_cents'), onsiteHourlyRateCents: integer('onsite_hourly_rate_cents'),
   id: text('id').primaryKey(), name: text('name').notNull(), active: integer('active').notNull().default(1),
 }, t => [uniqueIndex('clients_name_unique').on(t.name)]);

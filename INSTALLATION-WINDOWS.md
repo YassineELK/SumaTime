@@ -95,6 +95,8 @@ Mise à jour : sauvegarder, arrêter la tâche, mettre à jour les sources en co
 
 ## 6. Reprendre les données précédentes
 
+Depuis la version 0.2, les connexions GLPI personnelles utilisent aussi un fichier `glpi-key` à côté de la base. La commande de sauvegarde en crée une copie `<sauvegarde>.sqlite.glpi-key` lorsqu’il existe. Restaurer cette clé sous le nom `glpi-key` à côté de la base correspondante. Protéger cette paire et conserver `.env.local` séparément. Voir [la configuration GLPI et sa restauration](docs/GLPI.md).
+
 La prévisualisation locale a été copiée dans `data\timesheet.sqlite` avec conservation des identifiants. La base d’origine `.wrangler` est intacte. Le premier compte local reprend le membre administrateur existant. Pour un ancien partenaire, créer son compte avec la même adresse e-mail pour conserver ses prestations.
 
 Pour une autre base SQLite compatible, **avant le premier démarrage et avec une destination inexistante** :

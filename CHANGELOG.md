@@ -1,5 +1,19 @@
 # Versions de Sumatoni Time
 
+## v0.2.0 — 17 septembre 2026
+
+Une journée de travail centrée sur le prestataire :
+
+- Accueil personnel **Ma journée**, temps réels et facturables, semaine en un regard et accès aux interventions du jour.
+- Reprise des tickets récents, saisie rapide, raccourci N et brouillon conservé par compte sur l’appareil.
+- Chronomètre conservé sur le serveur, un par personne, avec arrêt puis vérification des horaires et description avant enregistrement.
+- Enregistrement atomique au passage de minuit, contrôle des chevauchements, protection contre les doublons et application des règles de déplacement existantes.
+- Connexion GLPI personnelle : recherche, filtres, pagination, ouverture du ticket, préparation d’une prestation ou d’un chrono. Association explicite des entités GLPI aux clients.
+- Jetons GLPI chiffrés, sessions temporaires fermées, délais limités et sauvegarde de la clé de chiffrement.
+- Parcours adaptés au téléphone, confirmations intégrées et correction des fonds colorés du calendrier pour éviter les repères visibles derrière les prestations.
+
+La configuration de l’instance GLPI réelle reste à renseigner. Le connecteur a été vérifié contre une API simulée et ne transmet aucun temps dans GLPI. Voir `docs/GLPI.md`, `docs/EVOLUTION-V0.2.0.md` et `RECETTE.md`.
+
 ## v0.1.0 — 17 septembre 2026
 
 Version de référence autonome pour Windows Server, enregistrée à la demande de l’utilisateur.

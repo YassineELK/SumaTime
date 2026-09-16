@@ -93,7 +93,7 @@ export async function GET(request: Request) {
       return new Response(csv(table), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="sumatoni-${kind === 'partner' ? 'releve-partenaire' : clientExport ? 'releve-client' : summary ? 'synthese' : 'detail'}-${from}-${to}.csv"`, 'Cache-Control': 'no-store' } });
     }
     const [clients, members] = await Promise.all([
-      db.prepare(member.role === 'admin' ? 'SELECT * FROM clients ORDER BY active DESC, name COLLATE NOCASE' : 'SELECT id,name,active,color,NULL AS hourly_rate_cents,NULL AS onsite_hourly_rate_cents FROM clients ORDER BY active DESC,name COLLATE NOCASE').all(),
+      db.prepare(member.role === 'admin' ? 'SELECT * FROM clients ORDER BY active DESC, name COLLATE NOCASE' : 'SELECT id,name,active,color,glpi_entity_id,NULL AS hourly_rate_cents,NULL AS onsite_hourly_rate_cents FROM clients ORDER BY active DESC,name COLLATE NOCASE').all(),
       member.role === 'admin' ? db.prepare('SELECT m.id,m.user_id,m.email,m.name,m.role,m.active,m.travel_fee_cents,a.provider,a.login FROM members m LEFT JOIN accounts a ON a.member_id=m.id ORDER BY m.name COLLATE NOCASE').all() : Promise.resolve({ results: [member] }),
     ]);
     return response({ me: member, clients: clients.results, members: members.results, entries: rows });
@@ -117,6 +117,13 @@ export async function POST(request: Request) {
       const name = text(body.name, 'Le nom du client');
       const result = await db.prepare('INSERT INTO clients (id,name,active) SELECT ?,?,1 WHERE NOT EXISTS (SELECT 1 FROM clients WHERE lower(name)=lower(?))').bind(crypto.randomUUID(), name, name).run();
       if (!result.meta.changes) throw new HttpError('Ce client existe déjà.');
+    } else if (body.action === 'clientGlpi') {
+      admin(member);
+      if (body.entity !== null && (!Number.isSafeInteger(body.entity) || body.entity < 0)) throw new HttpError('L’entité GLPI doit être un entier positif ou zéro.');
+      const id = text(body.id, 'Le client');
+      if (body.entity !== null && await db.prepare('SELECT id FROM clients WHERE glpi_entity_id=? AND id<>?').bind(body.entity, id).first()) throw new HttpError('Cette entité GLPI est déjà associée à un autre client.');
+      const result = await db.prepare('UPDATE clients SET glpi_entity_id=? WHERE id=?').bind(body.entity, id).run();
+      if (!result.meta.changes) throw new HttpError('Client introuvable.', 404);
     } else if (body.action === 'clientColor') {
       admin(member);
       if (body.color !== null && (typeof body.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(body.color))) throw new HttpError('Choisissez une couleur valide au format #RRGGBB.');

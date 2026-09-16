@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./brand.css";
+import "./provider.css";
 
 export const metadata: Metadata = {
   title: "Sumatoni Time · Prestations",
