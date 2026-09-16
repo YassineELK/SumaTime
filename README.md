@@ -1,26 +1,33 @@
 # Sumatoni Time
 
-Application web responsive de saisie de prestations pour un administrateur et ses partenaires.
+Application web pour administrateur et partenaires : calendrier au quart d’heure, saisie client/ticket/horaires, arrondi supérieur par prestation, exports CSV internes, relevé client sans partenaire et relevé par partenaire avec totaux pour contrôler sa facture, modes sur site/à distance, tarifs horaires et forfait de déplacement quotidien par client et prestataire, verrouillage de facturation.
 
-## Documents
+Comptes locaux par e-mail/mot de passe. Active Directory / LDAP optionnel. Aucun compte ChatGPT requis.
+
+## Démarrer
+
+Node.js 24 requis. Depuis ce dossier :
+
+```powershell
+npm ci
+Copy-Item .env.example .env.local
+npm run build
+npm start
+```
+
+Ouvrir http://127.0.0.1:5173. Créer l’administrateur avec le code généré dans data/setup-token.txt. Le dossier data reste privé et ne doit pas être servi par IIS.
 
 - [Architecture et besoins métier](ARCHITECTURE.md)
-- [Guide d’utilisation et exploitation](GUIDE.md)
-- [Résultats de recette](RECETTE.md)
-- [Référence technique du starter](docs/STARTER-TECHNIQUE.md)
+- [Installation Windows et Active Directory](INSTALLATION-WINDOWS.md)
+- [Guide utilisateur](GUIDE.md)
+- [Recette](RECETTE.md)
 
-## Fonctions
+## Vérifier
 
-Client, ticket, date et heures ; description facultative ; arrondi au quart d’heure supérieur ; droits administrateur/partenaire ; gestion des clients et accès ; filtres ; CSV détaillé et synthèse ; verrouillage des prestations facturées.
+```powershell
+node node_modules/typescript/bin/tsc --noEmit
+node --test tests/business.test.mjs tests/calendar.test.mjs tests/auth.test.mjs
+node tests/run-api.mjs
+```
 
-## Démarrage technique
-
-Node 22.13 ou supérieur. Installer avec `npm run install:ci`, compiler avec `npm run build`, puis appliquer les migrations locales avant de lancer `npm run dev`. Voir la référence technique pour les commandes D1. L’authentification locale simulée est uniquement destinée au développement ; Sites gère l’identité en production.
-
-## Vérification
-
-- `node node_modules/typescript/bin/tsc --noEmit`
-- `node --test tests/business.test.mjs`
-- `node tests/api-recette.mjs` uniquement contre une base de recette isolée vide, servie sur le port 8787.
-
-Les données locales de l’aperçu et les données de production sont indépendantes. Ne pas inclure `.wrangler`, `.sites-runtime`, les variables privées ou des identifiants d’accès dans un export du code.
+Le test API démarre le build de production sur le port 8787 avec une nouvelle base isolée. Sauvegarde : npm run db:backup. Les fichiers de l’ancien starter Sites restent des références historiques ; les commandes npm dev/build/start utilisent désormais exclusivement Next.js et Node.

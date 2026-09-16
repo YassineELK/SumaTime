@@ -2,18 +2,19 @@
 
 ## Démarrer
 
-1. Ouvrez l’application et connectez-vous avec votre compte ChatGPT.
-2. À la première ouverture du site privé, indiquez votre nom et activez votre espace. Votre compte devient administrateur.
-3. Dans **Clients**, ajoutez les noms de vos clients.
-4. Dans **Prestations**, saisissez client, ticket, date, début et fin. Vérifiez la durée affichée, puis enregistrez.
+1. Ouvrez l’application. À la première ouverture, créez le compte administrateur avec votre nom, e-mail, mot de passe de 12 caractères minimum et code d’installation du serveur (data/setup-token.txt).
+2. Connectez-vous ensuite avec votre e-mail et votre mot de passe local.
+3. Dans **Clients**, ajoutez vos clients. Dans **Calendrier**, sélectionnez une plage puis complétez le ticket.
 
-La base de production démarre vide. Les données utilisées pour la recette sont exclusivement locales.
+Aucun compte ChatGPT n’est nécessaire. Vos données de prévisualisation locale sont conservées lors de la migration. Les données de l’ancienne publication cloud sont indépendantes.
 
 ## Faire travailler un partenaire
 
-Dans **Équipe**, ajoutez son nom et l’adresse exacte de son compte ChatGPT. Aucune invitation e-mail n’est envoyée par l’application. Le partenaire peut consulter, saisir, corriger et exporter ses propres prestations. L’administrateur voit toutes les prestations et peut les corriger tant qu’elles ne sont pas facturées.
+Dans **Équipe**, choisissez **Compte local**, renseignez son nom, son e-mail et un mot de passe provisoire. Transmettez l’adresse de l’application et les identifiants par un canal privé. Le partenaire doit changer ce mot de passe à la première connexion. Aucun e-mail automatique n’est envoyé.
 
-Le site est livré privé, réservé à son propriétaire. L’administrateur doit aussi autoriser le partenaire dans les réglages de partage du site. L’autorisation dans Équipe ne modifie pas à elle seule cette protection de la plateforme. Selon le compte Sites, l’accès externe peut être disponible ou nécessiter une autre configuration d’hébergement. Ne partagez pas publiquement un espace non activé : l’activation initiale doit être réalisée par le propriétaire pendant que le site est privé.
+Pour un compte **Active Directory / LDAP**, renseignez aussi l’identifiant annuaire correspondant au filtre configuré sur le serveur (par exemple jdupont). Le partenaire utilise son mot de passe AD ; celui-ci n’est jamais enregistré par l’application. Le connecteur doit être activé par l’exploitant.
+
+Chaque partenaire consulte, corrige et exporte uniquement ses propres prestations. L’administrateur voit l’ensemble. Désactiver un compte révoque immédiatement ses sessions. **Réinitialiser le mot de passe** permet de remplacer un mot de passe local perdu par un nouveau mot de passe provisoire. **Mon compte** permet de changer son propre mot de passe et déconnecte les autres sessions.
 
 ## Saisir les heures
 
@@ -24,6 +25,8 @@ L’application s’ouvre maintenant sur **Calendrier**. Sur PC, la semaine du l
 Sur téléphone, sélectionnez le jour en haut, touchez le premier puis le dernier quart d’heure de votre intervention. La fenêtre s’ouvre après le deuxième appui. Pour un seul quart d’heure, touchez deux fois la même case ou utilisez **Continuer** après le premier appui. Le défilement vertical reste disponible entre les deux appuis. Les horaires préremplis restent ajustables dans la fenêtre.
 
 Choisissez le client, indiquez le numéro de ticket et éventuellement une description, puis cliquez sur **Enregistrer la prestation**. La prestation apparaît dans le calendrier et reste accessible dans le relevé et les exports de l’onglet **Prestations**. Les nouvelles saisies sont toujours attribuées à la personne connectée, même lorsque l’administrateur affiche un autre partenaire ou toute l’équipe.
+
+Dans les champs Début et Fin, le bouton horloge propose les minutes 00, 15, 30 et 45. Pour une heure précise, tapez directement au format HH:MM (par exemple 10:47) ; elle est conservée sans arrondir l’horaire. Ce fonctionnement est identique dans Calendrier et Prestations.
 
 Cliquez sur un bloc existant pour le modifier. Les prestations déjà facturées s’ouvrent en lecture seule. Les horaires exacts d’anciennes prestations restent conservés, même s’ils ne correspondent pas à un quart d’heure. La navigation propose les semaines précédente/suivante, **Aujourd’hui** et une date au choix. Les jours futurs ne permettent pas de saisie.
 
@@ -41,7 +44,15 @@ Une prestation de 16 minutes donne 30 minutes facturables. Chaque ligne est arro
 4. Ouvrez le fichier dans Excel. Il utilise UTF-8, un séparateur point-virgule et la virgule décimale. Si votre tableur utilise un autre séparateur régional, utilisez son import CSV en choisissant le point-virgule.
 5. Après la facturation, utilisez la double coche sur chaque prestation pour la marquer facturée et la verrouiller. L’export seul ne change aucun statut.
 
-La synthèse additionne les minutes arrondies de chaque prestation. Le fichier contient des durées ; aucun tarif, montant, TVA ou numéro de facture n’est calculé. Les relevés ne remplacent pas vos factures.
+La synthèse additionne les minutes arrondies de chaque prestation. Les exports internes détaillent aussi les tarifs et montants de prestations, ainsi que les forfaits prestataires, lorsque ces montants ont été configurés. Aucune TVA ni numéro de facture n’est calculé. Les relevés ne remplacent pas vos factures.
+
+## Contrôler la facture d’un partenaire
+
+Dans **Prestations**, choisir la période de la facture et le partenaire, laisser **Tous les clients** (ou sélectionner le client concerné), choisir **Tous les statuts**, vider la recherche puis cliquer sur **Appliquer → Exporter → Relevé partenaire · Facture**. Un partenaire connecté peut télécharger uniquement son propre relevé.
+
+Le CSV s’ouvre dans Excel et contient les clients, tickets, descriptions, dates, horaires, modes, minutes réelles et heures arrondies au quart d’heure, ainsi que les forfaits de déplacement. La dernière ligne totalise le temps et les déplacements. Chaque forfait reste compté une fois par jour, client et prestataire. Les prestations déjà facturées au client restent incluses : ce statut ne signifie pas que la facture du partenaire a été contrôlée.
+
+Les tarifs de vente aux clients ne sont pas repris et aucun tarif horaire d’achat au partenaire n’est supposé. Le rapprochement du montant des heures se fait avec le tarif convenu avec le partenaire. Si un forfait manque ou si un ancien mode reste à confirmer, la colonne **À vérifier** le signale et le total monétaire des déplacements reste vide, pour ne pas donner un montant incomplet.
 
 ## Corriger et conserver
 
@@ -51,24 +62,34 @@ Archiver un client retire son nom des nouvelles saisies, tout en conservant l’
 
 ## Connexion et erreurs
 
-Une connexion Internet est nécessaire. Attendez la confirmation d’enregistrement avant de quitter l’écran. Les champs restent présents en cas d’échec ; rechargez uniquement après avoir copié une saisie non enregistrée si nécessaire. Un nouvel essai sur la même saisie conserve son identifiant pour limiter les doublons. Il n’y a pas de mode hors connexion ni de sauvegarde automatique des brouillons après fermeture de l’onglet.
+Une connexion au serveur est nécessaire. Attendez la confirmation d’enregistrement avant de quitter l’écran. Les champs restent présents en cas d’échec ; rechargez uniquement après avoir copié une saisie non enregistrée si nécessaire. Un nouvel essai sur la même saisie conserve son identifiant pour limiter les doublons. Il n’y a pas de mode hors connexion ni de sauvegarde automatique des brouillons après fermeture de l’onglet.
 
 ## Exploitation technique
 
-Le projet utilise React, Vinext, Workers et D1. Le schéma se trouve dans `db/schema.ts`, les migrations dans `drizzle/`, l’API dans `app/api/time/route.ts`. Les données ne sont pas stockées dans le dépôt Git.
+Voir **INSTALLATION-WINDOWS.md** pour l’installation autonome, le démarrage Windows, HTTPS, le connecteur AD/LDAP, les sauvegardes et la restauration. Aucun réglage de partage Sites n’intervient dans les accès de cette version.
 
-- Installation : `npm run install:ci` (Node 22.13 ou supérieur).
-- Compilation : `npm run build`.
-- Développement local : `npm run dev` ; connexion locale simulée uniquement en développement sur loopback.
-- Migrations locales : compiler d’abord puis appliquer chaque SQL dans l’ordre avec Wrangler, en suivant les indications du README technique du starter.
-- Validation : `node node_modules/typescript/bin/tsc --noEmit` ; tests de recette documentés dans `RECETTE.md`.
+## Sur site, tarifs et relevé destiné au client
 
-En production, l’identité est fournie par la plateforme Sites. Ne déployez pas directement ce serveur derrière un proxy qui laisse le navigateur choisir les en-têtes `oai-authenticated-user-*`. En hébergement autonome, il faut remplacer ou sécuriser cette couche d’authentification avant exposition.
+Dans Calendrier ou Prestations, cocher **Sur site** pour une intervention chez le client. Décoché signifie **À distance**. Les anciennes lignes restent **À confirmer** jusqu’à une correction explicite : cocher Sur site, ou choisir Confirmer à distance. Une ligne facturée doit être rouverte par l’administrateur avant correction.
 
-Les clés et jetons d’hébergement ne doivent pas être placés dans les sources. La connexion simulée du développement est exclue de la compilation de production. Chaque appel à l’API vérifie le rôle ; le filtrage visuel n’est pas la barrière de sécurité.
+Dans **Clients → Tarifs**, configurer le tarif horaire standard et, pour les clients concernés, un tarif horaire sur site. Si le tarif sur site est vide, le tarif standard s’applique. Dans **Équipe → Déplacement**, configurer le forfait de chaque prestataire, administrateur compris. Vide signifie non renseigné ; 0 signifie aucun montant. Montants en euros, sans calcul de TVA.
 
-### Sauvegarde et reprise
+Le montant d’une prestation utilise sa durée arrondie au quart d’heure supérieur et le tarif enregistré avec cette prestation. Le forfait est dû **une seule fois par prestataire, par jour et par client** avec au moins une prestation sur site. Il est présenté séparément du montant facturable au client et n’y est pas ajouté automatiquement.
 
-La base D1 assure la persistance. Avant usage critique, l’exploitant doit fixer la rétention des sauvegardes, l’accès administratif de secours et la procédure de restauration. Les exports CSV sont une copie métier utile mais ne contiennent pas tous les paramètres ni toutes les relations nécessaires à une restauration complète. Cette version ne fournit pas de bouton de restauration ni de journal d’audit immuable.
+Les changements de tarifs s’appliquent aux nouvelles prestations. Modifier uniquement le ticket, la description ou l’horaire conserve le tarif enregistré. Changer le client ou le mode prend le tarif actuel. Le forfait du jour/client/prestataire est conservé dès sa première saisie sur site ; les changements de forfait s’appliquent aux nouvelles combinaisons jour/client/prestataire. Les montants manquants restent vides dans les exports.
 
-Pour restaurer un environnement, remettre une sauvegarde D1 et la révision de code compatible, puis vérifier les membres, clients, totaux et droits sur un espace de validation avant de rouvrir l’accès. Ne rejouer aucune migration déjà appliquée ; les migrations de production sont versionnées et immuables.
+Pour remettre un relevé au client :
+
+1. Dans **Prestations**, sélectionner le client et la période, puis **Appliquer**.
+2. Choisir **Exporter → Relevé client · Sans partenaire**.
+3. Le CSV contient uniquement **Date, Début, Fin, Mode de prestation**. Aucun nom, identifiant de partenaire, ticket, commentaire ou tarif n’est transmis.
+
+Un client précis est obligatoire afin de ne pas mélanger plusieurs entreprises. L’export respecte les filtres et les droits du compte ; un partenaire n’exporte que ses propres interventions. Toute ligne au mode À confirmer bloque cet export jusqu’à correction.
+
+Les exports internes conservent les partenaires, séparent À distance et Sur site et donnent les montants. Le forfait journalier est affecté à la première prestation sur site enregistrée du jour/client/prestataire dans l’ordre de saisie. Un filtre de ticket ou de statut qui masque cette ligne masque également son forfait : pour le total des déplacements, exporter la journée/client complète sans filtre de ticket ou de statut.
+
+## Couleurs des clients dans le calendrier
+
+L’administrateur peut ouvrir **Clients → Couleur du calendrier**, choisir une couleur proposée ou personnalisée, puis cliquer sur **Enregistrer la couleur**. Le choix s’applique aux prestations anciennes et nouvelles du client, pour toute l’équipe. Le calendrier conserve un fond clair teinté et un texte foncé pour la lisibilité, avec une bordure dans la couleur choisie.
+
+**Revenir à la couleur par défaut**, puis enregistrer, supprime la personnalisation. Les clients existants gardent leur apparence par défaut tant qu’aucune couleur n’est choisie. Les prestations facturées conservent leur cadenas et, lorsqu’elles sont personnalisées, un contour en pointillés. Ce réglage visuel ne modifie pas les temps, tarifs, exports ou statuts.

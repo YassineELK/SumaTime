@@ -1,14 +1,16 @@
 'use client';
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type PointerEvent } from 'react';
+import TimeInput from '@/components/time-input';
+import LocationField from '@/components/location-field';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Check, LockKeyhole, Plus, RefreshCw, X } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { billedMinutes, brusselsToday, clockTime, duration, parseTime, validDate } from '@/lib/business';
+import { billedMinutes, brusselsToday, clockTime, duration, locationLabel, parseTime, validDate } from '@/lib/business';
 import { addDays, layoutEntries, overlaps, selectedRange, slotAt, SLOT_COUNT, SLOT_HEIGHT } from '@/lib/calendar';
 import { weekStart } from '@/lib/calendar';
 import type { Entry, State } from '@/lib/types';
 
 type Selection = { date: string; first: number; last: number; mode: 'mouse' | 'touch' | 'keyboard' };
-type Draft = { id: string; version?: number; client_id: string; ticket: string; date: string; start: string; end: string; description: string; member_id: string; member: string; billed: number };
+type Draft = { id: string; version?: number; client_id: string; ticket: string; date: string; start: string; end: string; description: string; on_site: boolean | null; member_id: string; member: string; billed: number };
 const dayName = (date: string, long = false) => new Date(date + 'T12:00:00Z').toLocaleDateString('fr-BE', { timeZone: 'UTC', weekday: long ? 'long' : 'short', day: 'numeric', month: long ? 'long' : undefined });
 
 export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: () => void }) {
@@ -68,10 +70,10 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
   function openRange(date: string, first: number, last: number) {
     if (loading || loadError || date > today) return;
     const { start, end } = selectedRange(first, last);
-    showDraft({ id: crypto.randomUUID(), client_id: data.clients.find(c => c.active)?.id || '', ticket: '', date, start: clockTime(start), end: end === 1440 ? '00:00' : clockTime(end), description: '', member_id: me.id, member: me.name, billed: 0 });
+    showDraft({ id: crypto.randomUUID(), client_id: data.clients.find(c => c.active)?.id || '', ticket: '', date, start: clockTime(start), end: end === 1440 ? '00:00' : clockTime(end), description: '', on_site: false, member_id: me.id, member: me.name, billed: 0 });
   }
   function openEntry(entry: Entry) {
-    showDraft({ id: entry.id, version: entry.version, client_id: entry.client_id, ticket: entry.ticket, date: entry.date, start: clockTime(entry.start), end: entry.end === 1440 ? '00:00' : clockTime(entry.end), description: entry.description, member_id: entry.member_id, member: entry.member, billed: entry.billed });
+    showDraft({ id: entry.id, version: entry.version, client_id: entry.client_id, ticket: entry.ticket, date: entry.date, start: clockTime(entry.start), end: entry.end === 1440 ? '00:00' : clockTime(entry.end), description: entry.description, on_site: entry.on_site === null ? null : !!entry.on_site, member_id: entry.member_id, member: entry.member, billed: entry.billed });
   }
   function closeDraft() {
     if (savingRef.current) return;
@@ -161,6 +163,11 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
   }
   const range = selection ? selectedRange(selection.first, selection.last) : null;
   const readOnly = !!draft?.billed;
+  const clientColors = new Map(data.clients.map(client => [client.id, client.color]));
+  const eventColor = (clientId: string): CSSProperties => {
+    const color = clientColors.get(clientId);
+    return color ? { '--client-color': color, '--client-tint': color + '1A', '--client-hover': color + '2E', '--client-border': color + '66' } as CSSProperties : {};
+  };
 
   return <section className="time-calendar" aria-label="Calendrier des prestations">
     {notice && <div className="alert success" role="status"><Check size={18} />{notice}</div>}
@@ -175,7 +182,7 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
         {days.map(date => <div key={date} data-date={date} aria-label={dayName(date, true)} className={'calendar-day-column' + (date === anchor ? ' selected-day' : '') + (date === today ? ' is-today' : '') + (date > today ? ' future-day' : '')} onPointerDown={e => pointerDown(e, date)} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => { if (selectionRef.current?.mode === 'mouse') setRange(null); }} onLostPointerCapture={() => { if (selectionRef.current?.mode === 'mouse') setRange(null); }}>
           {Array.from({ length: SLOT_COUNT }, (_, slot) => <button key={slot} type="button" data-time-slot={slot} aria-label={`${dayName(date, true)}, ${clockTime(slot * 15)} à ${clockTime((slot + 1) * 15)}`} className={'calendar-slot' + (slot % 4 === 0 ? ' hour-start' : '')} style={{ height: SLOT_HEIGHT }} tabIndex={slot === cursor && date <= today ? 0 : -1} disabled={loading || !!loadError || date > today} onFocus={() => setCursor(slot)} onKeyDown={e => key(e, date, slot)} onClick={e => { if (lastPointer.current === 'touch') tap(date, slot); else if (e.detail === 0) openRange(date, slot, slot); }}><span>{clockTime(slot * 15)}</span></button>)}
           {selection?.date === date && range && <div className="calendar-range" style={{ top: range.start / 15 * SLOT_HEIGHT, height: (range.end - range.start) / 15 * SLOT_HEIGHT }}><strong>{clockTime(range.start)}–{clockTime(range.end)}</strong></div>}
-          {layoutEntries(entries.filter(e => e.date === date), 12.5).map(({ entry, lane, lanes }) => <button key={entry.id} className={'calendar-event' + (entry.billed ? ' is-billed' : '') + (entry.end - entry.start < 30 ? ' compact-event' : '')} style={{ top: entry.start / 15 * SLOT_HEIGHT, height: Math.max(20, (entry.end - entry.start) / 15 * SLOT_HEIGHT - 2), left: `calc(${lane / lanes * 100}% + 3px)`, width: `calc(${100 / lanes}% - 6px)` }} title={`${entry.client} · ${entry.ticket}\n${entry.member}\n${clockTime(entry.start)}–${clockTime(entry.end)} · ${duration(billedMinutes(entry.start, entry.end))} facturables${entry.billed ? '\nFacturé' : ''}`} aria-label={`${entry.billed ? 'Consulter' : 'Modifier'} ${entry.ticket}, ${entry.client}, ${entry.member}, ${clockTime(entry.start)} à ${clockTime(entry.end)}`} onPointerDown={e => e.stopPropagation()} onClick={() => openEntry(entry)}><span>{entry.billed && <LockKeyhole size={12} />}{clockTime(entry.start)}–{clockTime(entry.end)}</span><strong>{entry.client}</strong><small>{entry.ticket}{member === '' ? ' · ' + entry.member : ''}</small></button>)}
+          {layoutEntries(entries.filter(e => e.date === date), 12.5).map(({ entry, lane, lanes }) => <button key={entry.id} className={'calendar-event' + (clientColors.get(entry.client_id) ? ' has-client-color' : '') + (entry.billed ? ' is-billed' : '') + (entry.end - entry.start < 30 ? ' compact-event' : entry.end - entry.start < 45 ? ' short-event' : '')} style={{ ...eventColor(entry.client_id), top: entry.start / 15 * SLOT_HEIGHT, height: Math.max(20, (entry.end - entry.start) / 15 * SLOT_HEIGHT - 2), left: `calc(${lane / lanes * 100}% + 3px)`, width: `calc(${100 / lanes}% - 6px)` }} title={`${entry.client} · ${entry.ticket}\n${entry.member} · ${locationLabel(entry.on_site)}\n${clockTime(entry.start)}–${clockTime(entry.end)} · ${duration(billedMinutes(entry.start, entry.end))} facturables${entry.billed ? '\nFacturé' : ''}`} aria-label={`${entry.billed ? 'Consulter' : 'Modifier'} ${entry.ticket}, ${entry.client}, ${entry.member}, ${clockTime(entry.start)} à ${clockTime(entry.end)}`} onPointerDown={e => e.stopPropagation()} onClick={() => openEntry(entry)}><span>{!!entry.billed && <LockKeyhole size={12} />}{clockTime(entry.start)}–{clockTime(entry.end)}</span><span className="calendar-event-details"><strong>{entry.client}</strong><small>{entry.ticket}{member === '' ? ' · ' + entry.member : ''}</small></span></button>)}
         </div>)}
         </div>
       </div>
@@ -191,7 +198,8 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
           <fieldset disabled={saving || readOnly}>
             <label>Client <span className="required">*</span><select autoFocus required value={draft.client_id} onChange={e => update('client_id', e.target.value)}><option value="">Choisir un client</option>{data.clients.filter(c => c.active || (draft.version && c.id === draft.client_id)).map(c => <option key={c.id} value={c.id}>{c.name}{c.active ? '' : ' (archivé)'}</option>)}</select></label>
             <label>Numéro de ticket <span className="required">*</span><input required maxLength={120} placeholder="Ex. INC-2026-042" value={draft.ticket} onChange={e => update('ticket', e.target.value)} /></label>
-            <div className="calendar-modal-times"><label>Date <span className="required">*</span><input required type="date" max={today} value={draft.date} onChange={e => update('date', e.target.value)} /></label><label>Début <span className="required">*</span><input required type="time" step={draft.version ? 60 : 900} value={draft.start} onChange={e => update('start', e.target.value)} /></label><label>Fin <span className="required">*</span><input required type="time" step={draft.version ? 60 : 900} value={draft.end} onChange={e => update('end', e.target.value)} /></label></div>
+            <div className="calendar-modal-times"><label>Date <span className="required">*</span><input required type="date" max={today} value={draft.date} onChange={e => update('date', e.target.value)} /></label><TimeInput label="Début" value={draft.start} onChange={value => update('start', value)} disabled={saving || readOnly} /><TimeInput label="Fin" value={draft.end} onChange={value => update('end', value)} disabled={saving || readOnly} /></div>
+            <LocationField value={draft.on_site} onChange={on_site => setDraft(prev => prev ? ({ ...prev, on_site }) : prev)} disabled={saving || readOnly} />
             <label>Description <span className="optional">facultatif</span><textarea rows={3} maxLength={2000} value={draft.description} onChange={e => update('description', e.target.value)} placeholder="Sur quoi avez-vous travaillé ?" /></label>
           </fieldset>
           <div className="duration-preview"><div><span>Temps réel</span><strong>{validTimes ? duration(end - begin) : '—'}</strong></div><ChevronRight size={18} /><div><span>À facturer</span><strong>{validTimes ? duration(billedMinutes(begin, end)) : '—'}</strong></div></div>

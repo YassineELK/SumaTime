@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./brand.css";
 
 export const metadata: Metadata = {
   title: "Sumatoni Time · Prestations",
   description: "Vos prestations, du temps saisi au relevé de facturation.",
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: "/brand/sumatoni-mark.png",
+    shortcut: "/brand/sumatoni-mark.png",
   },
 };
 

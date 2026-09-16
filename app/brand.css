@@ -1,0 +1,89 @@
+/* Sumatoni public website identity: see docs/CHARTE-SUMATONI.md. */
+@font-face{font-family:Poppins;font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/poppins-400.woff2') format('woff2')}
+@font-face{font-family:Poppins;font-style:normal;font-weight:500;font-display:swap;src:url('/fonts/poppins-500.woff2') format('woff2')}
+@font-face{font-family:Poppins;font-style:normal;font-weight:600;font-display:swap;src:url('/fonts/poppins-600.woff2') format('woff2')}
+@font-face{font-family:Poppins;font-style:normal;font-weight:700;font-display:swap;src:url('/fonts/poppins-700.woff2') format('woff2')}
+
+:root{--font-brand:Poppins,system-ui,sans-serif;--navy:#08131c;--ink:#183543;--muted:#486675;--line:#d3e3e9;--bg:#f3f8fa;--accent:#29a7df;--blue:#08759c;--teal:#008082;--brand-soft:#e9f5fb;--brand-heading:#0a2938}
+body{font-family:var(--font-brand);background:radial-gradient(circle at 85% 10%,#29a7df0a,transparent 35%),var(--bg)}
+h1,h2,h3{color:var(--brand-heading);font-weight:600;letter-spacing:-.025em}
+.calendar-dialog[data-slot=dialog-content],.quarter-picker[data-slot=popover-content],.ticket{font-family:var(--font-brand)}
+label{color:#274754}
+input,select,textarea{border-color:#cbdde5}
+input:focus,select:focus,textarea:focus{outline-color:var(--blue);border-color:var(--accent)}
+button:focus-visible,a:focus-visible,summary:focus-visible{outline-color:var(--blue)}
+.sidebar{background:radial-gradient(ellipse at 0 0,#073c4f 0,transparent 65%),linear-gradient(#08131c,#061019);overflow-y:auto}
+.sidebar>.brand,.sidebar>.profile{flex-shrink:0}
+.sidebar nav button{color:#b5cbd7}
+.sidebar nav button:hover{background:#103344}
+.sidebar nav button.active{background:#123d50;color:#fff;box-shadow:inset 3px 0 var(--accent)}
+.sidebar nav button.active svg,.tiny-clock{color:var(--accent)}
+.nav-caption{color:#93aebe}
+.sidebar-note p,.sidebar-note>span,.profile small{color:#a4bdcb}
+.profile{border-color:#234454}
+.avatar{background:#123d50;border-color:#2d647d;color:#def3fc}
+.sidebar>.brand{background:#f7fbfd;border:1px solid #29a7df45;border-radius:12px;padding:12px 10px;letter-spacing:normal}
+.sumatoni-brand{display:flex;align-items:center;gap:10px;min-width:0;width:100%;line-height:1}
+.sumatoni-mark{display:block;object-fit:contain;width:31px;height:40px;flex:none}
+.sumatoni-brand-copy{display:flex;flex-direction:column;min-width:0;gap:7px;align-items:flex-start}
+.sumatoni-wordmark{display:block;object-fit:contain;width:140px;max-width:100%;height:auto}
+.sumatoni-product{font-family:var(--font-brand);font-size:10px;line-height:1;font-weight:600;letter-spacing:.28em;color:#086b8d}
+.dark-brand{margin-bottom:32px;padding:0}
+.dark-brand .sumatoni-mark{width:40px;height:51px}
+.dark-brand .sumatoni-wordmark{width:184px}
+.dark-brand .sumatoni-brand{gap:15px}
+.page-footer .sumatoni-brand{width:148px;gap:8px}
+.page-footer .sumatoni-mark{width:22px;height:28px}
+.page-footer .sumatoni-product{font-size:8px}
+.page-footer .sumatoni-brand-copy{gap:5px}
+.primary{background:var(--accent);color:#041018;border:1px solid transparent}
+.primary:hover{background:#35b4ec}
+.secondary{color:#173b4b;border-color:#c7dee7}
+.secondary:hover{background:#e9f5fb}
+.filter-button,.period-button{background:#e5f3f9;color:#086b8d}
+.filter-button:hover,.period-button:hover{background:#d4edf8}
+.eyebrow{color:#086b8d}
+.topbar strong,.role{color:#486675}
+.topbar{background:#fbfdfe}
+.panel{box-shadow:0 3px 12px #144c6209}
+.stat-accent{background:#e7f6f6;border-color:#b8dede}
+.stat-accent>span,.stat-accent>span svg,.stat-accent strong{color:#006f73}
+.stat-accent small{color:#3f6d71}
+.square-icon,.client-monogram,.empty-icon{background:#e9f5fb;color:#086b8d}
+.duration-preview{background:#e9f5fb;border-color:#c6e3ef}
+.duration-preview strong{color:#086b8d}
+.duration-preview span{color:#486675}
+.help-card>span{color:#008082}
+.export-menu[open] summary,.export-menu button:hover{background:#e9f5fb}
+.export-menu small{color:#486675;line-height:1.65}
+.ticket{color:#086b8d}
+.location-tag.onsite{background:#e3f4f3;color:#00676a}
+.icon-button:hover,.pagination button{background:#e9f5fb;color:#086b8d}
+.calendar-day-label.is-today>strong{background:#08759c}
+.calendar-day-label.is-today,.calendar-day-column.is-today{background:#f1f9fc}
+.calendar-event{background:#e5f3fb;border-color:#bee0ee;border-left-color:var(--accent);color:#0a526f}
+.calendar-event:hover{background:#d4eef9}
+.calendar-event.is-billed{background:#e8f5f2;border-color:#bedfd8;border-left-color:#008082;color:#235e59}
+.calendar-range{background:#29a7df26;border-color:#08759c;color:#0a526f}
+.calendar-slot:not(:disabled):hover,.calendar-slot:focus-visible{background:#e5f3fb}
+.calendar-slot:focus-visible{outline-color:#08759c}
+.calendar-selection-bar{background:#e9f5fb;border-color:#b2dce9;color:#0a526f}
+.time-input-trigger:hover,.quarter-picker button:hover{background:#e5f3fb}
+.quarter-picker button[aria-pressed=true]{background:#08759c;color:#fff}
+.welcome{background:radial-gradient(circle at 14% 16%,#073c4fcc,transparent 42%),radial-gradient(circle at 86% 72%,#0080822e,transparent 35%),linear-gradient(#050d12,#08131c 48%,#061019)}
+.welcome-card{border-color:#cbdfe9;box-shadow:0 24px 80px #00000026}
+.welcome-footer{color:#93aebe}
+.client-color-settings>summary{display:flex;align-items:center;gap:9px;cursor:pointer}
+.client-color-dot{display:inline-block;width:16px;height:16px;border:1px solid #18354340;border-radius:50%;flex:none}
+.client-color-palette{display:flex;flex-wrap:wrap;gap:8px}
+.client-color-palette button{position:relative;display:grid;place-items:center;width:44px;height:44px;background:#fff;border:1px solid var(--line);border-radius:8px}
+.client-color-palette button>span{width:28px;height:28px;border-radius:5px;border:1px solid #18354326}
+.client-color-palette button[aria-pressed=true]{outline:2px solid var(--blue);outline-offset:1px}
+.client-color-palette button>svg{position:absolute;right:0;bottom:0;border-radius:50%;background:white;color:var(--ink);box-shadow:0 0 0 1px var(--line)}
+.client-color-custom{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.client-color-custom input[type=color]{width:56px;height:44px;min-height:44px;padding:4px;margin:0;cursor:pointer;flex:none}
+.client-color-settings .primary{justify-self:start}
+.calendar-event.has-client-color{background:var(--client-tint);border-color:var(--client-border);border-left-color:var(--client-color);color:#183543}
+.calendar-event.has-client-color:hover{background:var(--client-hover)}
+.calendar-event.has-client-color.is-billed{border-top-style:dashed;border-right-style:dashed;border-bottom-style:dashed}
+@media(max-width:760px){.sidebar{overflow:visible}.sidebar>.brand{width:184px;padding:8px 10px}.sidebar nav button.active{box-shadow:inset 0 -3px var(--accent)}.calendar-day-label.selected-day{box-shadow:inset 0 -3px #08759c;background:#e9f5fb}.page-footer{align-items:center}.dark-brand .sumatoni-wordmark{width:160px}}

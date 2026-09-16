@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Put in a separate IIS site directory, NOT the source/data directory.
+     Requires IIS URL Rewrite + Application Request Routing; enable proxy. -->
+<configuration>
+  <system.webServer>
+    <rewrite>
+      <rules>
+        <rule name="HTTPS" stopProcessing="true">
+          <match url="(.*)" />
+          <conditions><add input="{HTTPS}" pattern="off" /></conditions>
+          <action type="Redirect" url="https://{HTTP_HOST}/{R:1}" redirectType="Permanent" />
+        </rule>
+        <rule name="Sumatoni Time" stopProcessing="true">
+          <match url="(.*)" />
+          <action type="Rewrite" url="http://127.0.0.1:5173/{R:1}" />
+        </rule>
+      </rules>
+    </rewrite>
+  </system.webServer>
+</configuration>

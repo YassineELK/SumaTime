@@ -1,4 +1,4 @@
-export type Member = { id: string; user_id: string | null; email: string; name: string; role: 'admin' | 'partner'; active: number };
-export type Client = { id: string; name: string; active: number };
-export type Entry = { id: string; member_id: string; client_id: string; client: string; member: string; ticket: string; date: string; start: number; end: number; description: string; billed: number; version: number };
+export type Member = { id: string; user_id: string | null; email: string; name: string; role: 'admin' | 'partner'; active: number; provider?: 'local' | 'ldap'; must_change?: number; login?: string; travel_fee_cents?: number | null };
+export type Client = { color: string | null; id: string; name: string; active: number; hourly_rate_cents: number | null; onsite_hourly_rate_cents: number | null };
+export type Entry = { id: string; member_id: string; client_id: string; client: string; member: string; ticket: string; date: string; start: number; end: number; description: string; on_site: number | null; hourly_rate_cents: number | null; travel_cents: number | null; travel_counted: number; billed: number; version: number };
 export type State = { me: Member | null; setup?: boolean; denied?: boolean; email?: string; clients: Client[]; members: Member[]; entries: Entry[] };
