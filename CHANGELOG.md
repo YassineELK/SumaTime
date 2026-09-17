@@ -1,5 +1,11 @@
 # Versions de Sumatoni Time
 
+## v0.2.1 — 17 septembre 2026
+
+- Déploiement Ubuntu : service systemd non privilégié, reverse proxy Nginx HTTPS et sauvegarde quotidienne vérifiée.
+- Mise à jour ciblée de `baseline-browser-mapping` vers 2.11.24 (correction GHSA-w5vr-8v7q-w6rv).
+- Procédure Linux, restauration et suivi du certificat autosigné dans `INSTALLATION-LINUX.md`.
+
 ## v0.2.0 — 17 septembre 2026
 
 Une journée de travail centrée sur le prestataire :

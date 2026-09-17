@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Sumatoni Time backup
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+Unit=sumatoni-time-backup.service
+
+[Install]
+WantedBy=timers.target

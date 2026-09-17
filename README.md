@@ -21,6 +21,7 @@ Ouvrir http://127.0.0.1:5173. Créer l’administrateur avec le code généré d
 
 - [Architecture et besoins métier](ARCHITECTURE.md)
 - [Installation Windows et Active Directory](INSTALLATION-WINDOWS.md)
+- [Installation Linux, HTTPS et sauvegardes](INSTALLATION-LINUX.md)
 - [Guide utilisateur](GUIDE.md)
 - [Recette](RECETTE.md)
 

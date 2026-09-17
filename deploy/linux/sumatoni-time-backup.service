@@ -1,0 +1,15 @@
+[Unit]
+Description=Verified Sumatoni Time backup
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+EnvironmentFile=/etc/sumatoni-time/sumatoni.env
+Environment=BACKUP_DIRECTORY=/var/backups/sumatoni-time
+ExecStart=/usr/local/bin/node /usr/local/lib/sumatoni-time/backup.mjs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/sumatoni-time
