@@ -64,7 +64,7 @@ Pour restaurer : arrêter `sumatoni-time`, conserver une copie de l'état actuel
 
 ## DNS et infrastructure
 
-Le DNS demandé est `192.168.10.111`. La résolution depuis le poste Windows renvoie `192.168.87.224`. Lors du déploiement, les requêtes UDP et TCP du serveur vers ce DNS expirent : vérifier les règles réseau entre `192.168.87.224` et `192.168.10.111` sur le port 53, puis vérifier la résolution interne et AD.
+Le DNS demandé est `192.168.10.111`. Après correction réseau et nouveau contrôle le 17 septembre 2026, les requêtes DNS UDP et TCP depuis Ubuntu réussissent. Le résolveur système, resté sur le DNS public de secours après les échecs initiaux, a été redémarré : `resolvectl` et `getent` renvoient bien `192.168.87.224` pour `sumatime.home.sumatoni.be`. La résolution externe et l'accès HTTPS par nom depuis Ubuntu sont également vérifiés. La connexion AD réelle reste à configurer et à tester séparément.
 
 La configuration est placée dans `/etc/resolv.conf` et `/etc/systemd/resolved.conf.d/sumatoni.conf`. Le fichier `/etc/.pve-ignore.resolv.conf` empêche Proxmox de rétablir son ancien DNS au redémarrage ; aligner également la configuration DNS du conteneur dans Proxmox avant de retirer ce fichier. Le DNS public de secours préexistant est conservé.
 
