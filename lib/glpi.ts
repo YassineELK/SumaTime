@@ -68,7 +68,8 @@ export async function glpiTickets(member: string, config: Config, query: string,
     if (open) { params.set(`criteria[${index}][link]`, 'AND'); params.set(`criteria[${index}][field]`, statusField); params.set(`criteria[${index}][searchtype]`, 'equals'); params.set(`criteria[${index}][value]`, 'notold'); }
     const result = await get('search/Ticket?' + params);
     if (!Number.isFinite(Number(result.totalcount)) || !result.data || typeof result.data !== 'object') throw new AuthError('La réponse de GLPI est inattendue.', 502);
-    const ids = [...new Set(Object.values(result.data).map((row: any) => Number(row[idField])).filter(id => Number.isSafeInteger(id) && id > 0))].slice(0, 10);
+    const idName = (options as any)[idField]?.field || "id";
+    const ids = [...new Set(Object.values(result.data).map((row: any) => Number(row[idField] ?? row["Ticket." + idName] ?? row["glpi_tickets." + idName])).filter(id => Number.isSafeInteger(id) && id > 0))].slice(0, 10);
     const tickets: GlpiTicket[] = [];
     // A small sequential page avoids sharing a PHP session across concurrent requests.
     for (const id of ids) {

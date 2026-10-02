@@ -26,7 +26,7 @@ export async function mockGlpi(port=8790) {
       let selected=permitted;
       for(let i=0;i<2;i++){const field=url.searchParams.get(`criteria[${i}][field]`),value=url.searchParams.get(`criteria[${i}][value]`);if(field==='12')selected=selected.filter(t=>t.status<5);if(field==='1')selected=selected.filter(t=>t.name.toLowerCase().includes(value.toLowerCase()));if(field==='2')selected=selected.filter(t=>String(t.id)===value.replaceAll('^','').replaceAll('$',''));}
       const offset=Number((url.searchParams.get('range')||'0-9').split('-')[0]);
-      return send(200,{totalcount:selected.length,data:selected.slice(offset,offset+10).map(t=>({'2':t.id}))});
+      return send(200,{totalcount:selected.length,data:selected.slice(offset,offset+10).map(t=>({'Ticket.id':t.id,'Ticket.name':t.name}))});
     }
     if(path.startsWith('Ticket/')){const ticket=permitted.find(t=>t.id===Number(path.split('/')[1]));return ticket?send(200,ticket):send(403,['FORBIDDEN']);}
     send(404,{error:'Unknown mock API'});
