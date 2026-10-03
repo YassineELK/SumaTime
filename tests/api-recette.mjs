@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { restoreEntryPayload } from '../lib/calendar.ts';
 const base = process.env.TEST_URL || 'http://127.0.0.1:8787';
 const temporary = 'Temporary-for-QA-12345';
 const permanent = 'Permanent-for-QA-67890';
@@ -77,11 +78,13 @@ await call(alice, { ...entry, version: 1, description: 'Ancienne version' }, '/a
 const undoEntry = { ...entry, id: randomUUID(), ticket: 'UNDO-ME', start: '06:00', end: '06:16', description: 'Historique' };
 await call(alice, undoEntry);
 await call(alice, { ...undoEntry, version: 1, start: '07:00', end: '07:16', ticket: 'CURRENT', description: 'Changement courant' });
-await call(alice, { action: 'restoreEntryRange', id: undoEntry.id, version: 2, date, start: '06:00', end: '06:16' });
+const undoPayload = restoreEntryPayload({ id: undoEntry.id, version: 2, original: { date, start: 360, end: 376 } });
+assert.deepEqual(undoPayload, { action: 'restoreEntryRange', id: undoEntry.id, version: 2, date, start: '06:00', end: '06:16' });
+await call(alice, undoPayload);
 let undoState = (await call(alice)).entries.find(value => value.id === undoEntry.id);
 assert.equal(undoState.ticket, 'CURRENT'); assert.equal(undoState.description, 'Changement courant'); assert.equal(undoState.start, 360); assert.equal(undoState.end, 376); checks += 4;
 await call(alice, { ...undoEntry, version: 3, start: '08:00', end: '08:16', ticket: 'CONCURRENT', description: 'Modification concurrente' });
-await call(alice, { action: 'restoreEntryRange', id: undoEntry.id, version: 3, date, start: '06:00', end: '06:16' }, '/api/time', 409);
+await call(alice, restoreEntryPayload({ id: undoEntry.id, version: 3, original: { date, start: 360, end: 376 } }), '/api/time', 409);
 undoState = (await call(alice)).entries.find(value => value.id === undoEntry.id);
 assert.equal(undoState.ticket, 'CONCURRENT'); assert.equal(undoState.start, 480); checks += 2;
 await call(alice, { action: 'deleteEntry', id: undoEntry.id, version: 4 });

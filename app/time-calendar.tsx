@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Form
 import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Check, LockKeyhole, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { billedMinutes, brusselsToday, clockTime, duration, parseTime, validDate } from '@/lib/business';
-import { addDays, findCalendarFocus, layoutEntries, overlaps, selectedRange, slotAt, SLOT_COUNT, SLOT_HEIGHT, type CalendarFocusTarget } from '@/lib/calendar';
+import { addDays, findCalendarFocus, layoutEntries, overlaps, restoreEntryPayload, selectedRange, slotAt, SLOT_COUNT, SLOT_HEIGHT, type CalendarFocusTarget } from '@/lib/calendar';
 import { weekStart } from '@/lib/calendar';
 import type { Entry, State } from '@/lib/types';
 
@@ -17,7 +17,7 @@ type UndoMove = { id: string; original: Pick<Entry, 'date' | 'start' | 'end'>; v
 type FocusTarget = CalendarFocusTarget & { date: string };
 const dayName = (date: string, long = false) => new Date(date + 'T12:00:00Z').toLocaleDateString('fr-BE', { timeZone: 'UTC', weekday: long ? 'long' : 'short', day: 'numeric', month: long ? 'long' : undefined });
 
-export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: () => void }) {
+export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: () => void | Promise<void> }) {
   const me = data.me!;
   const today = brusselsToday();
   const [anchor, setAnchor] = useState(today);
@@ -41,6 +41,8 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
   const lastPointer = useRef('mouse');
   const returnFocus = useRef<HTMLElement | null>(null);
   const focusTarget = useRef<FocusTarget | null>(null);
+  const [focusRestoreReady, setFocusRestoreReady] = useState(false);
+  const loadSequence = useRef(0);
   const [cursor, setCursor] = useState(32);
   const startOfWeek = weekStart(anchor);
   const days = Array.from({ length: 7 }, (_, i) => addDays(startOfWeek, i));
@@ -48,18 +50,19 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
 
   useEffect(() => {
     const controller = new AbortController();
+    const request = ++loadSequence.current;
     const q = new URLSearchParams({ from: startOfWeek, to: addDays(startOfWeek, 6), member });
     void Promise.resolve().then(() => {
-      if (controller.signal.aborted) return null;
-      setLoading(true); setLoadError(''); setEntries([]); setRange(null);
+      if (controller.signal.aborted || request !== loadSequence.current) return null;
+      setLoading(true); setLoadError(''); setRange(null);
       return fetch('/api/time?' + q, { signal: controller.signal, cache: 'no-store' });
     }).then(async res => {
-      if (!res || controller.signal.aborted) return;
+      if (!res || controller.signal.aborted || request !== loadSequence.current) return;
       const json = await res.json() as State & { error?: string };
       if (!res.ok || !json.me) throw new Error(json.error || 'Votre accès a changé. Actualisez votre espace.');
-      if (!controller.signal.aborted) setEntries(json.entries);
-    }).catch(e => { if (!controller.signal.aborted) setLoadError(e instanceof Error ? e.message : 'Chargement impossible. Réessayez.'); })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+      if (!controller.signal.aborted && request === loadSequence.current) setEntries(json.entries);
+    }).catch(e => { if (!controller.signal.aborted && request === loadSequence.current) setLoadError(e instanceof Error ? e.message : 'Chargement impossible. Réessayez.'); })
+      .finally(() => { if (!controller.signal.aborted && request === loadSequence.current) setLoading(false); });
     return () => controller.abort();
   }, [startOfWeek, member, revision, data, setRange]);
   useEffect(() => { if (scroll.current) scroll.current.scrollTop = 8 * 4 * SLOT_HEIGHT; }, []);
@@ -76,20 +79,27 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
 
   useEffect(() => {
     const target = focusTarget.current;
-    if (loading || !target) return;
-    focusTarget.current = null;
+    if (loading || !target || !focusRestoreReady) return;
     const entry = entries.find(value => value.id === target.id);
-    requestAnimationFrame(() => {
+    const frame = requestAnimationFrame(() => {
       const controls = [...document.querySelectorAll<HTMLElement>('[data-entry-id]')];
       const control = entry && findCalendarFocus(controls, target);
       if (control) {
         control.focus({ preventScroll: true });
+        focusTarget.current = null;
+        setFocusRestoreReady(false);
         return;
       }
       const column = [...document.querySelectorAll<HTMLElement>('[data-date]')].find(value => value.dataset.date === (entry?.date || target.date));
-      column?.querySelector<HTMLElement>('[data-time-slot="0"]')?.focus({ preventScroll: true });
+      const fallback = column?.querySelector<HTMLElement>('[data-time-slot="0"]');
+      if (fallback) {
+        fallback.focus({ preventScroll: true });
+        focusTarget.current = null;
+        setFocusRestoreReady(false);
+      }
     });
-  }, [entries, loading]);
+    return () => cancelAnimationFrame(frame);
+  }, [entries, loading, focusRestoreReady]);
 
   function showDraft(value: Draft) {
     returnFocus.current = document.activeElement as HTMLElement;
@@ -196,7 +206,8 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
     try {
       const res=await fetch('/api/time',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'deleteEntry',id:draft.id,version:draft.version})});
       const result=await res.json() as {error?:string};if(!res.ok)throw new Error(result.error||'Suppression impossible.');
-      setDraft(null);setDeleting(false);setUndo(null);setOperationError(false);setNotice('Prestation supprimée. Les totaux ont été actualisés.');setRevision(n=>n+1);onSaved();
+      focusTarget.current = null; setFocusRestoreReady(false);
+      setDraft(null);setDeleting(false);setUndo(null);setOperationError(false);setNotice('Prestation supprimée. Les totaux ont été actualisés.');setRevision(n=>n+1);void onSaved();
     }catch(e){setSaveError(e instanceof Error?e.message:'Suppression non confirmée. Actualisez avant de réessayer.');}
     finally{savingRef.current=false;setSaving(false);}
   }
@@ -207,26 +218,30 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
     const activeHandle = active?.dataset.calendarHandle;
     if (active?.dataset.entryId === entry.id && (activeHandle === 'body' || activeHandle === 'start' || activeHandle === 'end' || activeHandle === 'move')) {
       focusTarget.current = { id: entry.id, handle: activeHandle, date: next.date };
+      setFocusRestoreReady(false);
     }
     savingRef.current=true;setSaving(true);setOperationError(false);setNotice('Enregistrement des horaires…');
     try{
       const res=await fetch('/api/time',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...entry,...next,action:'saveEntry',start:clockTime(next.start),end:next.end===1440?'00:00':clockTime(next.end),on_site:entry.on_site===null?null:!!entry.on_site})});
       const result=await res.json() as {error?:string};if(!res.ok)throw new Error(result.error||'Modification impossible.');
-      setUndo({ id: entry.id, original: { date: entry.date, start: entry.start, end: entry.end }, version: entry.version + 1 });setNotice(`Horaires enregistrés : ${clockTime(next.start)}–${clockTime(next.end)}.`);setRevision(n=>n+1);onSaved();
-    }catch(e){setOperationError(true);setNotice(e instanceof Error?e.message:'Enregistrement non confirmé. Actualisez avant de réessayer.');setRevision(n=>n+1);}
+      setUndo({ id: entry.id, original: { date: entry.date, start: entry.start, end: entry.end }, version: entry.version + 1 });setNotice(`Horaires enregistrés : ${clockTime(next.start)}–${clockTime(next.end)}.`);setRevision(n=>n+1);await Promise.resolve(onSaved());
+      if (focusTarget.current) setFocusRestoreReady(true);
+    }catch(e){setOperationError(true);setNotice(e instanceof Error?e.message:'Enregistrement non confirmé. Actualisez avant de réessayer.');setRevision(n=>n+1);if(focusTarget.current)setFocusRestoreReady(true);}
     finally{savingRef.current=false;setSaving(false);}
   }
   async function undoMove(value: UndoMove) {
     if (savingRef.current) return;
     focusTarget.current = { id: value.id, handle: 'move', date: value.original.date };
+    setFocusRestoreReady(false);
     savingRef.current = true; setSaving(true); setOperationError(false); setNotice('Restauration des horaires précédents…');
     try {
-      const res = await fetch('/api/time', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'restoreEntryRange', id: value.id, version: value.version, ...value.original }) });
+      const res = await fetch('/api/time', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(restoreEntryPayload(value)) });
       const result = await res.json() as { error?: string };
       if (!res.ok) throw new Error(result.error || 'Annulation impossible.');
-      setUndo(null); setNotice('Horaires précédents restaurés.'); setRevision(n => n + 1); onSaved();
+      setUndo(null); setNotice('Horaires précédents restaurés.'); setRevision(n => n + 1); await Promise.resolve(onSaved());
+      if (focusTarget.current) setFocusRestoreReady(true);
     } catch (e) {
-      setOperationError(true); setNotice(e instanceof Error ? e.message : 'Annulation non confirmée. Actualisez avant de réessayer.'); setRevision(n => n + 1);
+      setOperationError(true); setNotice(e instanceof Error ? e.message : 'Annulation non confirmée. Actualisez avant de réessayer.'); setRevision(n => n + 1); if (focusTarget.current) setFocusRestoreReady(true);
     } finally { savingRef.current = false; setSaving(false); }
   }
   const range = selection ? selectedRange(selection.first, selection.last) : null;

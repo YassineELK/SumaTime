@@ -1,12 +1,12 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { mockGlpi } from './glpi-mock.mjs';
 mkdirSync('.sites-runtime',{recursive:true});const directory=mkdtempSync(resolve('.sites-runtime','provider-qa-'));
 const env={...process.env,DATABASE_PATH:resolve(directory,'qa.sqlite'),SETUP_TOKEN:randomBytes(32).toString('hex'),APP_URL:'http://127.0.0.1:8787',TEST_URL:'http://127.0.0.1:8787',LDAP_ENABLED:'false',GLPI_API_URL:'http://127.0.0.1:8790/apirest.php',GLPI_APP_TOKEN:'mock-app-token',GLPI_WRITE_ENABLED:'true',NEXT_TELEMETRY_DISABLED:'1'};
-const mock=await mockGlpi();const child=spawn(process.execPath,['node_modules/next/dist/bin/next','start','--hostname','127.0.0.1','--port','8787'],{env,stdio:['ignore','pipe','pipe']});let logs='';child.stdout.on('data',x=>logs+=x);child.stderr.on('data',x=>logs+=x);
+const mock=await mockGlpi();const serverArgs=existsSync('.next/standalone/server.js')?['.next/standalone/server.js']:['node_modules/next/dist/bin/next','start','--hostname','127.0.0.1','--port','8787'];const child=spawn(process.execPath,serverArgs,{env:{...env,HOSTNAME:'127.0.0.1',PORT:'8787'},stdio:['ignore','pipe','pipe']});let logs='';child.stdout.on('data',x=>logs+=x);child.stderr.on('data',x=>logs+=x);
 try{
   let ready=false;for(let i=0;i<400;i++){if(child.exitCode!==null)throw new Error(logs);try{if((await fetch(env.TEST_URL+'/api/auth')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,300));}
   if(!ready)throw new Error(logs);

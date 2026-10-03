@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addDays, weekStart, selectedRange, slotAt, layoutEntries, overlaps, adjustedRange } from '../lib/calendar.ts';
+import { addDays, weekStart, selectedRange, slotAt, layoutEntries, overlaps, adjustedRange, restoreEntryPayload } from '../lib/calendar.ts';
 
 const entry = (id, start, end, member_id = 'me') => ({ id, start, end, member_id, date: '2026-09-16' });
 test('calendar weeks start on Monday across months, years and DST', () => {
@@ -45,4 +45,9 @@ test('calendar moves retain exact minute duration and stay within the day',()=>{
  assert.deepEqual(adjustedRange(547,622,-15,'end'),{start:547,end:607});
  assert.deepEqual(adjustedRange(547,622,900,'start'),{start:621,end:622});
  assert.deepEqual(adjustedRange(547,622,-900,'end'),{start:547,end:548});
+});
+
+test('undo caller serializes the historical range without business fields',()=>{
+ const payload=restoreEntryPayload({id:'11111111-1111-1111-1111-111111111111',version:8,original:{date:'2026-09-16',start:90,end:1440}});
+ assert.deepEqual(payload,{action:'restoreEntryRange',id:'11111111-1111-1111-1111-111111111111',version:8,date:'2026-09-16',start:'01:30',end:'00:00'});
 });

@@ -24,8 +24,13 @@ export function timerSegments(started: number, stopped: number): TimerSegment[] 
   // quarter-hour and midnight rules.
   const quarter = 15;
   const measuredFrom = civilMinuteIndex(brusselsMoment(started));
+  // Use the offset that was active during the measured interval for the
+  // exclusive end. At an exact DST boundary `brusselsMoment(stopped)` already
+  // uses the new offset, which would invent a civil jump (spring) or lose one
+  // hour (autumn) in the proposed editable range.
+  const stoppedUtcMinute = Math.floor(stopped / 60000);
   const stoppedMinuteRemainder = ((stopped % 60000) + 60000) % 60000;
-  const measuredTo = civilMinuteIndex(brusselsMoment(stopped)) + (stoppedMinuteRemainder === 0 ? 0 : 1);
+  const measuredTo = stoppedUtcMinute + measuredStartOffset + (stoppedMinuteRemainder === 0 ? 0 : 1);
   const from = Math.floor(measuredFrom / quarter) * quarter;
   const to = Math.max(from + quarter, Math.ceil(measuredTo / quarter) * quarter);
   const segments: TimerSegment[] = [];

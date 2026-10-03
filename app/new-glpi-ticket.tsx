@@ -5,10 +5,11 @@ import { Check, ExternalLink, Plus } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import type { Client } from '@/lib/types';
 import type { GlpiTicket } from '@/lib/glpi';
+import { readPendingGlpiRequest, removePendingGlpiRequest, savePendingGlpiRequest, type GlpiRequestPayload } from '@/lib/glpi-draft';
 
 type Status = { configured: boolean; connected: boolean; canCreate: boolean; web: string | null };
 type Category = { id: number; name: string };
-type Form = { request_id: string; client_id: string; title: string; description: string; type: number; urgency: number; category: number };
+type Form = GlpiRequestPayload;
 type ApiValue = { error?: string; uncertain?: boolean; ticket?: GlpiTicket; categories?: Category[]; limited?: boolean } & Partial<Status>;
 
 function newForm(clientId: string, description: string): Form {
@@ -30,6 +31,24 @@ export default function NewGlpiTicket({ clients, initialClient = '', initialDesc
   const [uncertain, setUncertain] = useState(false);
   const [created, setCreated] = useState<GlpiTicket | null>(null);
   const sending = useRef(false);
+  const restored = useRef(false);
+
+  useEffect(() => {
+    if (restored.current) return;
+    restored.current = true;
+    const pending = readPendingGlpiRequest(initialClient, initialDescription);
+    if (!pending) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setForm(pending.payload);
+      setUncertain(true);
+      setCreated(null);
+      setCategories([]);
+      setError('Résultat incertain : la demande conservée utilise le même UUID et le même payload. Récupérez son résultat avant toute nouvelle demande.');
+    });
+    return () => { active = false; };
+  }, [initialClient, initialDescription]);
 
   useEffect(() => {
     if (!open) return;
@@ -106,6 +125,10 @@ export default function NewGlpiTicket({ clients, initialClient = '', initialDesc
     setError('');
     const payload = canonical(form);
     setForm(payload);
+    // Reserve the exact canonical request before sending. If the browser or
+    // network disappears after GLPI accepted it, remounting still has the
+    // identity needed for a safe idempotent reconciliation.
+    savePendingGlpiRequest(payload);
     let certainResponse = false;
     try {
       const response = await fetch('/api/glpi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, action: 'createTicket' }) });
@@ -117,12 +140,16 @@ export default function NewGlpiTicket({ clients, initialClient = '', initialDesc
         throw new Error(value.error || 'Création impossible.');
       }
       if (!value.ticket) throw new Error('La réponse GLPI est incomplète.');
+      removePendingGlpiRequest(payload.request_id);
       setCreated(value.ticket);
     } catch (reason) {
       if (!certainResponse) {
         setUncertain(true);
         setError('Résultat incertain : la demande a peut-être été acceptée par GLPI. Vérifiez vos tickets avant toute nouvelle demande.');
-      } else setError(reason instanceof Error ? reason.message : 'Création refusée. Corrigez le formulaire puis réessayez.');
+      } else {
+        removePendingGlpiRequest(payload.request_id);
+        setError(reason instanceof Error ? reason.message : 'Création refusée. Corrigez le formulaire puis réessayez.');
+      }
     } finally {
       sending.current = false;
       setBusy(false);
@@ -136,6 +163,7 @@ export default function NewGlpiTicket({ clients, initialClient = '', initialDesc
     setError('');
     try {
       const payload = canonical(form);
+      savePendingGlpiRequest(payload);
       const response = await fetch('/api/glpi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, action: 'createTicket' }) });
       const value = await response.json() as ApiValue;
       if (!response.ok) throw new Error(value.error || 'Le résultat reste incertain.');
@@ -143,6 +171,7 @@ export default function NewGlpiTicket({ clients, initialClient = '', initialDesc
       setForm(payload);
       setCreated(value.ticket);
       setUncertain(false);
+      removePendingGlpiRequest(payload.request_id);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Le résultat reste incertain. Vérifiez vos tickets dans GLPI.');
     } finally {

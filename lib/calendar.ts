@@ -1,4 +1,5 @@
 import type { Entry } from './types';
+import { clockTime } from './business';
 
 export const SLOT_MINUTES = 15;
 export const SLOT_HEIGHT = 24;
@@ -53,4 +54,22 @@ export function adjustedRange(start: number, end: number, delta: number, mode: C
   if (mode === 'end') return { start, end: Math.min(1440, Math.max(start + 1, end + shift)) };
   const next = Math.max(0, Math.min(1440 - (end - start), start + shift));
   return { start: next, end: next + end - start };
+}
+
+export type RestoreEntryInput = {
+  id: string;
+  version: number;
+  original: Pick<Entry, 'date' | 'start' | 'end'>;
+};
+
+/** Build the exact range-only request used by the calendar undo caller. */
+export function restoreEntryPayload(value: RestoreEntryInput) {
+  return {
+    action: 'restoreEntryRange' as const,
+    id: value.id,
+    version: value.version,
+    date: value.original.date,
+    start: clockTime(value.original.start),
+    end: value.original.end === 1440 ? '00:00' : clockTime(value.original.end),
+  };
 }

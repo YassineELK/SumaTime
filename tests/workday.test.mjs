@@ -17,9 +17,11 @@ test('DST changes cannot silently create incorrect civil times',()=>{
 });
 test('DST validation uses measured instants before applying civil rounding',()=>{
   assert.deepEqual(timerSegments(Date.parse('2026-03-29T00:40:00Z'),Date.parse('2026-03-29T00:50:00Z')),[{date:'2026-03-29',start:90,end:120}]);
+  assert.deepEqual(timerSegments(Date.parse('2026-03-29T00:40:00Z'),Date.parse('2026-03-29T01:00:00Z')),[{date:'2026-03-29',start:90,end:120}]);
   assert.throws(()=>timerSegments(Date.parse('2026-03-29T00:40:00Z'),Date.parse('2026-03-29T01:10:00Z')),/changement d’heure/);
   assert.throws(()=>timerSegments(Date.parse('2026-10-25T00:40:00Z'),Date.parse('2026-10-25T01:10:00Z')),/changement d’heure/);
   assert.deepEqual(timerSegments(Date.parse('2026-10-25T00:40:00Z'),Date.parse('2026-10-25T00:50:00Z')),[{date:'2026-10-25',start:150,end:180}]);
+  assert.deepEqual(timerSegments(Date.parse('2026-10-25T00:40:00Z'),Date.parse('2026-10-25T01:00:00Z')),[{date:'2026-10-25',start:150,end:180}]);
 });
 test('suggestions use Brussels quarter hours including the midnight boundary',()=>{
   assert.deepEqual(suggestedTimes(Date.parse('2026-09-16T08:17:00Z')),{date:'2026-09-16',start:'10:15',end:'10:30'});
