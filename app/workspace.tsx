@@ -1,5 +1,7 @@
 'use client';
 import Brand from '@/components/brand';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import ClientColor from '@/components/client-color';
 import TimeInput from '@/components/time-input';
 import LocationField from '@/components/location-field';
@@ -26,6 +28,7 @@ const query = (filters: Filters) => new URLSearchParams(filters).toString();
 const dateLabel = (date: string) => new Date(date + 'T12:00:00').toLocaleDateString('fr-BE', { day: 'numeric', month: 'short' });
 
 export default function Workspace() {
+  const router = useRouter();
   const [data, setData] = useState<State | null>(null);
   const [tab, setTab] = useState('day');
   const [filters, setFilters] = useState(initialFilters);
@@ -49,9 +52,10 @@ export default function Workspace() {
   const sequence = useRef(0);
   const ticketInput = useRef<HTMLInputElement>(null);
   const currentState = useRef({ data, filters, form });
-  currentState.current = { data, filters, form };
+  const member = data?.me;
+  useEffect(() => { currentState.current = { data, filters, form }; }, [data, filters, form]);
   useEffect(() => {
-    if (!data?.me) return;
+    if (!member) return;
     return registerPageTools([
       {
         name: 'read_timesheet_selection', title: 'Lire le relevé affiché',
@@ -87,13 +91,13 @@ export default function Workspace() {
         },
       },
     ]);
-  }, [!!data?.me]);
+  }, [member]);
   const reload = useCallback(async () => {
     const call = ++sequence.current;
     setLoading(true);
     try {
       const auth = await fetch('/api/auth', { cache: 'no-store' }).then(r => r.json()) as Pick<State, 'me'>;
-      if (!auth.me) { window.location.assign('/login'); return; }
+      if (!auth.me) { router.push('/login'); return; }
       if (auth.me.must_change) { setData({ me: auth.me, clients: [], members: [], entries: [] }); return; }
       const res = await fetch('/api/time?' + query(filters), { cache: 'no-store' });
       const json = await res.json() as State & { error?: string };
@@ -101,8 +105,8 @@ export default function Workspace() {
       if (call === sequence.current) { setData(json); setPage(0); }
     } catch (e) { if (call === sequence.current) { setData(prev => prev ? { ...prev, entries: [] } : null); setError(e instanceof Error ? e.message : 'Chargement impossible. Vérifiez votre connexion.'); } }
     finally { if (call === sequence.current) setLoading(false); }
-  }, [filters]);
-  useEffect(() => { void reload(); }, [reload]);
+  }, [filters, router]);
+  useEffect(() => { const task = setTimeout(() => { void reload(); }, 0); return () => clearTimeout(task); }, [reload]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6500); return () => clearTimeout(timer); }, [notice]);
   async function act(payload: object, success: string) {
     if (busy) return false;
@@ -123,16 +127,16 @@ export default function Workspace() {
   }, []);
   useEffect(() => {
     if (!data?.me || data.me.must_change) return;
-    void loadWork();
+    const initialLoad = setTimeout(() => { void loadWork(); }, 0);
     const focus = () => { if (document.visibilityState === 'visible') void loadWork(); };
     window.addEventListener('focus', focus); document.addEventListener('visibilitychange', focus);
     const timer = setInterval(focus, 30000);
-    return () => { window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus); clearInterval(timer); };
+    return () => { clearTimeout(initialLoad); window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus); clearInterval(timer); };
   }, [data, loadWork]);
   const openQuick = useCallback((seed: EntrySeed | null = null, mode: 'entry' | 'timer' = 'entry') => {
     if (mode === 'entry' && seed && data?.me && readDraft(data.me.id)) { setPendingQuick({ seed, mode }); return; }
     setQuick({ seed, mode });
-  }, [data?.me]);
+  }, [data]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if (!data?.me || data.me.must_change || event.key.toLowerCase() !== 'n' || event.ctrlKey || event.altKey || event.metaKey || event.repeat || quick || review || document.querySelector('[role="dialog"]') || (event.target instanceof HTMLElement && (event.target.isContentEditable || ['INPUT','SELECT','TEXTAREA','BUTTON'].includes(event.target.tagName)))) return;
@@ -192,7 +196,7 @@ export default function Workspace() {
   if (!data?.me) return <div className="welcome"><div className="welcome-card">{feedback}<h1>{loading ? 'Ouverture de votre espace…' : 'Connexion au serveur impossible'}</h1>{!loading && <button className="primary" onClick={() => void reload()}>Réessayer</button>}<a href="/login">Connexion</a></div></div>;
 
   return <div className="app-shell">
-    <aside className="sidebar"><a className="brand" href="/"><Brand /></a><Logout className="mobile-signout"><LogOut size={20} /></Logout><span className="nav-caption">VOTRE ESPACE</span><nav aria-label="Navigation principale">
+    <aside className="sidebar"><Link className="brand" href="/"><Brand /></Link><Logout className="mobile-signout"><LogOut size={20} /></Logout><span className="nav-caption">VOTRE ESPACE</span><nav aria-label="Navigation principale">
       <button className={tab === 'day' ? 'active' : ''} onClick={() => setTab('day')}><Clock3 size={20} /><span>Ma journée</span></button>
       <button className={tab === 'tickets' ? 'active' : ''} onClick={() => setTab('tickets')}><FileText size={20} /><span>Mes tickets GLPI</span></button>
       <button className={tab === 'calendar' ? 'active' : ''} onClick={() => setTab('calendar')}><CalendarDays size={20} /><span>Calendrier</span></button>

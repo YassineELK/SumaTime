@@ -47,6 +47,7 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
   const startOfWeek = weekStart(anchor);
   const days = Array.from({ length: 7 }, (_, i) => addDays(startOfWeek, i));
   const setRange = useCallback((value: Selection | null) => { selectionRef.current = value; setSelection(value); }, []);
+  const invalidateFocusTarget = useCallback(() => { focusTarget.current = null; setFocusRestoreReady(false); }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -90,16 +91,21 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
         setFocusRestoreReady(false);
         return;
       }
-      const column = [...document.querySelectorAll<HTMLElement>('[data-date]')].find(value => value.dataset.date === (entry?.date || target.date));
-      const fallback = column?.querySelector<HTMLElement>('[data-time-slot="0"]');
-      if (fallback) {
-        fallback.focus({ preventScroll: true });
-        focusTarget.current = null;
-        setFocusRestoreReady(false);
-      }
+      const requestedDate = entry?.date || target.date;
+      const preferredColumn = days.includes(requestedDate)
+        ? [...document.querySelectorAll<HTMLElement>('[data-date]')].find(value => value.dataset.date === requestedDate)
+        : null;
+      const columns = preferredColumn ? [preferredColumn, ...[...document.querySelectorAll<HTMLElement>('[data-date]')].filter(value => value !== preferredColumn)]
+        : [...document.querySelectorAll<HTMLElement>('[data-date]')];
+      const fallback = columns.flatMap(column => [...column.querySelectorAll<HTMLElement>('[data-time-slot]')]).find(value => !value.hasAttribute('disabled'))
+        || document.querySelector<HTMLElement>('[aria-label="Aujourd’hui"]:not([disabled])')
+        || document.querySelector<HTMLElement>('[aria-label="Semaine précédente"]:not([disabled])');
+      focusTarget.current = null;
+      setFocusRestoreReady(false);
+      if (fallback) fallback.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [entries, loading, focusRestoreReady]);
+  }, [days, entries, loading, focusRestoreReady]);
 
   function showDraft(value: Draft) {
     returnFocus.current = document.activeElement as HTMLElement;
@@ -176,10 +182,10 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
       setRange({ date, first: current?.mode === 'keyboard' && current.date === date ? current.first : slot, last: next, mode: 'keyboard' });
     } else setRange(null);
     setCursor(next);
-    if (nextDate !== date) setAnchor(nextDate);
+    if (nextDate !== date) { invalidateFocusTarget(); setAnchor(nextDate); }
     requestAnimationFrame(() => scroll.current?.querySelector<HTMLButtonElement>(`[data-date="${nextDate}"] [data-time-slot="${next}"]`)?.focus());
   }
-  function changeWeek(offset: number) { setRange(null); const next = addDays(anchor, offset * 7); setAnchor(next > today ? today : next); }
+  function changeWeek(offset: number) { invalidateFocusTarget(); setRange(null); const next = addDays(anchor, offset * 7); setAnchor(next > today ? today : next); }
   function update(field: keyof Draft, value: string) { setDraft(prev => prev ? { ...prev, [field]: value } : null); setSaveError(''); }
   let begin = 0, end = 0;
   try { if (draft) { begin = parseTime(draft.start); end = draft.end === '00:00' ? 1440 : parseTime(draft.end); } } catch { /* Native inputs show missing times. */ }
@@ -202,13 +208,14 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
   }
   async function removeEntry() {
     if (!draft?.version || draft.billed || savingRef.current) return;
-    savingRef.current=true; setSaving(true); setSaveError('');
+    focusTarget.current = { id: draft.id, handle: 'body', date: draft.date };
+    setFocusRestoreReady(false);
+    savingRef.current=true; setSaving(true); setLoading(true); setSaveError('');
     try {
       const res=await fetch('/api/time',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'deleteEntry',id:draft.id,version:draft.version})});
       const result=await res.json() as {error?:string};if(!res.ok)throw new Error(result.error||'Suppression impossible.');
-      focusTarget.current = null; setFocusRestoreReady(false);
-      setDraft(null);setDeleting(false);setUndo(null);setOperationError(false);setNotice('Prestation supprimée. Les totaux ont été actualisés.');setRevision(n=>n+1);void onSaved();
-    }catch(e){setSaveError(e instanceof Error?e.message:'Suppression non confirmée. Actualisez avant de réessayer.');}
+      setDraft(null);setDeleting(false);setUndo(null);setOperationError(false);setNotice('Prestation supprimée. Les totaux ont été actualisés.');setRevision(n=>n+1);void onSaved();setFocusRestoreReady(true);
+    }catch(e){setSaveError(e instanceof Error?e.message:'Suppression non confirmée. Actualisez avant de réessayer.');setLoading(false);setFocusRestoreReady(true);}
     finally{savingRef.current=false;setSaving(false);}
   }
   async function changeEntry(entry: Entry, next: {date:string;start:number;end:number}) {
@@ -220,7 +227,7 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
       focusTarget.current = { id: entry.id, handle: activeHandle, date: next.date };
       setFocusRestoreReady(false);
     }
-    savingRef.current=true;setSaving(true);setOperationError(false);setNotice('Enregistrement des horaires…');
+    savingRef.current=true;setSaving(true);setLoading(true);setOperationError(false);setNotice('Enregistrement des horaires…');
     try{
       const res=await fetch('/api/time',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...entry,...next,action:'saveEntry',start:clockTime(next.start),end:next.end===1440?'00:00':clockTime(next.end),on_site:entry.on_site===null?null:!!entry.on_site})});
       const result=await res.json() as {error?:string};if(!res.ok)throw new Error(result.error||'Modification impossible.');
@@ -233,7 +240,7 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
     if (savingRef.current) return;
     focusTarget.current = { id: value.id, handle: 'move', date: value.original.date };
     setFocusRestoreReady(false);
-    savingRef.current = true; setSaving(true); setOperationError(false); setNotice('Restauration des horaires précédents…');
+    savingRef.current = true; setSaving(true); setLoading(true); setOperationError(false); setNotice('Restauration des horaires précédents…');
     try {
       const res = await fetch('/api/time', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(restoreEntryPayload(value)) });
       const result = await res.json() as { error?: string };
@@ -241,7 +248,7 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
       setUndo(null); setNotice('Horaires précédents restaurés.'); setRevision(n => n + 1); await Promise.resolve(onSaved());
       if (focusTarget.current) setFocusRestoreReady(true);
     } catch (e) {
-      setOperationError(true); setNotice(e instanceof Error ? e.message : 'Annulation non confirmée. Actualisez avant de réessayer.'); setRevision(n => n + 1); if (focusTarget.current) setFocusRestoreReady(true);
+      setOperationError(true); setNotice(e instanceof Error ? e.message : 'Annulation non confirmée. Actualisez avant de réessayer.'); setLoading(false); setRevision(n => n + 1); if (focusTarget.current) setFocusRestoreReady(true);
     } finally { savingRef.current = false; setSaving(false); }
   }
   const range = selection ? selectedRange(selection.first, selection.last) : null;
@@ -254,12 +261,12 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
 
   return <section className="time-calendar" aria-label="Calendrier des prestations">
     {notice && <div className={'alert '+(operationError?'error':'success')} role={operationError?'alert':'status'}><Check size={18} />{notice}{undo&&<button className="text-button" disabled={saving} onClick={()=>void undoMove(undo)}>Annuler le déplacement</button>}</div>}
-    <div className="calendar-toolbar"><div className="calendar-navigation"><button className="secondary" aria-label="Semaine précédente" onClick={() => changeWeek(-1)}><ChevronLeft size={18} /></button><button className="secondary" onClick={() => { setAnchor(today); setRange(null); }}>Aujourd’hui</button><button className="secondary" aria-label="Semaine suivante" disabled={addDays(startOfWeek, 7) > today} onClick={() => changeWeek(1)}><ChevronRight size={18} /></button><h2>{new Date(startOfWeek + 'T12:00:00Z').toLocaleDateString('fr-BE', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}<span> — {new Date(addDays(startOfWeek, 6) + 'T12:00:00Z').toLocaleDateString('fr-BE', { day: 'numeric', month: 'long', timeZone: 'UTC' })}</span></h2></div><div className="calendar-controls"><label><span className="sr-only">Aller à une date</span><input type="date" max={today} value={anchor} onChange={e => { if (validDate(e.target.value) && e.target.value <= today) setAnchor(e.target.value); }} /></label>{me.role === 'admin' && <label><span className="sr-only">Calendrier du partenaire</span><select value={member} onChange={e => setMember(e.target.value)}><option value="">Toute l’équipe</option>{data.members.map(m => <option key={m.id} value={m.id}>{m.id === me.id ? 'Mon calendrier' : m.name}</option>)}</select></label>}<button className="primary" disabled={loading || !!loadError} onClick={() => openRange(anchor, 36, 39)}><Plus size={17} />Prestation</button></div></div>
+    <div className="calendar-toolbar"><div className="calendar-navigation"><button className="secondary" aria-label="Semaine précédente" onClick={() => changeWeek(-1)}><ChevronLeft size={18} /></button><button className="secondary" onClick={() => { invalidateFocusTarget(); setAnchor(today); setRange(null); }}>Aujourd’hui</button><button className="secondary" aria-label="Semaine suivante" disabled={addDays(startOfWeek, 7) > today} onClick={() => changeWeek(1)}><ChevronRight size={18} /></button><h2>{new Date(startOfWeek + 'T12:00:00Z').toLocaleDateString('fr-BE', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}<span> — {new Date(addDays(startOfWeek, 6) + 'T12:00:00Z').toLocaleDateString('fr-BE', { day: 'numeric', month: 'long', timeZone: 'UTC' })}</span></h2></div><div className="calendar-controls"><label><span className="sr-only">Aller à une date</span><input type="date" max={today} value={anchor} onChange={e => { if (validDate(e.target.value) && e.target.value <= today) { invalidateFocusTarget(); setAnchor(e.target.value); } }} /></label>{me.role === 'admin' && <label><span className="sr-only">Calendrier du partenaire</span><select value={member} onChange={e => { invalidateFocusTarget(); setMember(e.target.value); }}><option value="">Toute l’équipe</option>{data.members.map(m => <option key={m.id} value={m.id}>{m.id === me.id ? 'Mon calendrier' : m.name}</option>)}</select></label>}<button className="primary" disabled={loading || !!loadError} onClick={() => openRange(anchor, 36, 39)}><Plus size={17} />Prestation</button></div></div>
     <div className="calendar-instructions"><span><Clock3 size={16} /><span className="mouse-instruction">Sélectionnez une plage, déplacez une prestation ou étirez ses bords. Pas de 15 min ; horaires précis au clavier.</span><span className="touch-instruction">Touchez le premier puis le dernier quart d’heure de votre prestation.</span></span><span>Saisie pour <strong>{me.name}</strong> · Bruxelles</span></div>
     {loadError && <div className="alert error" role="alert"><span>{loadError}</span><button className="secondary" onClick={() => setRevision(n => n + 1)}><RefreshCw size={16} />Réessayer</button></div>}
     {selection && range && <div className="calendar-selection-bar" role="status"><span>{dayName(selection.date)} · <strong>{clockTime(range.start)}–{clockTime(range.end)}</strong> · {duration(range.end - range.start)}</span>{selection.mode !== 'mouse' && <button className="primary" onClick={() => openRange(selection.date, selection.first, selection.last)}>Continuer</button>}<button className="icon-button" aria-label="Annuler la sélection" onClick={() => setRange(null)}><X size={18} /></button></div>}
     <div className="calendar-panel panel" aria-busy={loading}>
-      <div className="calendar-day-head"><span className="calendar-zone">24 h</span>{days.map(date => <button key={date} className={'calendar-day-label' + (date === today ? ' is-today' : '') + (date === anchor ? ' selected-day' : '') + (date > today ? ' future-day' : '')} onClick={() => { setAnchor(date); setRange(null); }} disabled={date > today}><span>{new Date(date + 'T12:00:00Z').toLocaleDateString('fr-BE', { weekday: 'short', timeZone: 'UTC' })}</span><strong>{Number(date.slice(-2))}</strong><small>{loading ? '…' : duration(entries.filter(e => e.date === date).reduce((sum, e) => sum + billedMinutes(e.start, e.end), 0))}</small></button>)}</div>
+      <div className="calendar-day-head"><span className="calendar-zone">24 h</span>{days.map(date => <button key={date} className={'calendar-day-label' + (date === today ? ' is-today' : '') + (date === anchor ? ' selected-day' : '') + (date > today ? ' future-day' : '')} onClick={() => { invalidateFocusTarget(); setAnchor(date); setRange(null); }} disabled={date > today}><span>{new Date(date + 'T12:00:00Z').toLocaleDateString('fr-BE', { weekday: 'short', timeZone: 'UTC' })}</span><strong>{Number(date.slice(-2))}</strong><small>{loading ? '…' : duration(entries.filter(e => e.date === date).reduce((sum, e) => sum + billedMinutes(e.start, e.end), 0))}</small></button>)}</div>
       <div className="calendar-scroll" ref={scroll}>
         <div className="calendar-grid" style={{ height: SLOT_COUNT * SLOT_HEIGHT }}><div className="calendar-hours" aria-hidden="true">{Array.from({ length: 24 }, (_, h) => <span key={h} style={{ top: h * 4 * SLOT_HEIGHT }}>{String(h).padStart(2, '0')}:00</span>)}<span className="calendar-midnight">24:00</span></div>
         {days.map(date => <div key={date} data-date={date} aria-label={dayName(date, true)} className={'calendar-day-column' + (date === anchor ? ' selected-day' : '') + (date === today ? ' is-today' : '') + (date > today ? ' future-day' : '')} onPointerDown={e => pointerDown(e, date)} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => { if (selectionRef.current?.mode === 'mouse') setRange(null); }} onLostPointerCapture={() => { if (selectionRef.current?.mode === 'mouse') setRange(null); }}>
@@ -281,7 +288,7 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
           <fieldset disabled={saving || readOnly}>
             <label>Client <span className="required">*</span><select autoFocus required value={draft.client_id} onChange={e => update('client_id', e.target.value)}><option value="">Choisir un client</option>{data.clients.filter(c => c.active || (draft.version && c.id === draft.client_id)).map(c => <option key={c.id} value={c.id}>{c.name}{c.active ? '' : ' (archivé)'}</option>)}</select></label>
             <label>Numéro de ticket <span className="required">*</span><input required maxLength={120} placeholder="Ex. INC-2026-042" value={draft.ticket} onChange={e => update('ticket', e.target.value)} /></label>
-            {!readOnly&&<NewGlpiTicket clients={data.clients} initialClient={draft.client_id} initialDescription={draft.description} disabled={saving} onCreated={ticket=>setDraft(prev=>prev?{...prev,client_id:ticket.client_id||prev.client_id,ticket:'GLPI-'+ticket.id,description:prev.description||ticket.title}:prev)}/>}
+            {!readOnly&&<NewGlpiTicket clients={data.clients} memberId={data.me!.id} initialClient={draft.client_id} initialDescription={draft.description} disabled={saving} onCreated={ticket=>setDraft(prev=>prev?{...prev,client_id:ticket.client_id||prev.client_id,ticket:'GLPI-'+ticket.id,description:prev.description||ticket.title}:prev)}/>}
             <div className="calendar-modal-times"><label>Date <span className="required">*</span><input required type="date" max={today} value={draft.date} onChange={e => update('date', e.target.value)} /></label><TimeInput label="Début" value={draft.start} onChange={value => update('start', value)} disabled={saving || readOnly} /><TimeInput label="Fin" value={draft.end} onChange={value => update('end', value)} disabled={saving || readOnly} /></div>
             <LocationField value={draft.on_site} onChange={on_site => setDraft(prev => prev ? ({ ...prev, on_site }) : prev)} disabled={saving || readOnly} />
             <label>Description <span className="optional">facultatif</span><textarea rows={3} maxLength={2000} value={draft.description} onChange={e => update('description', e.target.value)} placeholder="Sur quoi avez-vous travaillé ?" /></label>

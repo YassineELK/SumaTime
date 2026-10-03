@@ -37,6 +37,7 @@ globalThis.fetch = async (input, init = {}) => {
     assert.deepEqual(payload, acceptedPayload, 'reconciliation must reuse the exact UUID and canonical payload');
     return new Response(JSON.stringify({ ticket: { id: 9001, title: payload.title, status: 1, entity: 4, url: 'http://127.0.0.1:8790/front/ticket.form.php?id=9001', client_id: client.id, client: client.name } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
+  if (url === '/api/glpi?uncertain=1') return new Response(JSON.stringify({ requests: [], blocked: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   if (url === '/api/glpi') return new Response(JSON.stringify({ configured: true, connected: true, canCreate: true, web: 'http://127.0.0.1:8790' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   if (url.startsWith('/api/glpi?createOptions')) return new Response(JSON.stringify({ categories: [{ id: 1, name: 'Assistance' }], limited: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   throw new Error(`Unexpected fetch ${url}`);

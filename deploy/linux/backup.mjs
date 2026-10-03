@@ -14,7 +14,7 @@ const db = new DatabaseSync(source, { readOnly: true });
 await backup(db, target); db.close(); chmodSync(target, 0o600);
 const check = new DatabaseSync(target, { readOnly: true });
 if (check.prepare('PRAGMA integrity_check').get().integrity_check !== 'ok') throw new Error('Database integrity check failed.');
-const tables = ['members', 'accounts', 'clients', 'entries', 'travel_days', 'work_timers', 'glpi_credentials'];
+const tables = ['members', 'accounts', 'clients', 'entries', 'travel_days', 'work_timers', 'glpi_credentials', 'glpi_creations'];
 const counts = Object.fromEntries(tables.map(table => [table, check.prepare(`SELECT count(*) AS n FROM ${table}`).get().n]));
 check.close();
 const files = ['timesheet.sqlite'];

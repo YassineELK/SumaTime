@@ -124,6 +124,13 @@ equal(db.prepare('SELECT COUNT(*) AS n FROM glpi_creations WHERE request_id=?').
 const uncertain={...creation,request_id:randomUUID(),title:'UNCERTAIN-CREATE'};
 equal((await call(alice,uncertain,'/api/glpi',409)).uncertain,true);
 equal((await call(alice,uncertain,'/api/glpi',409)).uncertain,true);
+const alicePending=await call(alice,null,'/api/glpi?uncertain=1');
+equal(alicePending.requests[0].payload,{request_id:uncertain.request_id,client_id:uncertain.client_id,title:uncertain.title,description:uncertain.description,type:uncertain.type,urgency:uncertain.urgency,category:uncertain.category});
+equal((await call(bob,null,'/api/glpi?uncertain=1')).requests,[]);
+await call(bob,{action:'acknowledgeCreation',request_id:uncertain.request_id},'/api/glpi');
+equal((await call(alice,null,'/api/glpi?uncertain=1')).requests.some(request=>request.payload.request_id===uncertain.request_id),true);
+await call(alice,{action:'acknowledgeCreation',request_id:uncertain.request_id},'/api/glpi');
+equal((await call(alice,null,'/api/glpi?uncertain=1')).requests.some(request=>request.payload.request_id===uncertain.request_id),false);
 const concurrent={...creation,request_id:randomUUID(),title:'CONCURRENT-CREATE'};
 const simultaneous=await Promise.all([1,2].map(()=>fetch(base+'/api/glpi',{method:'POST',headers:{Cookie:alice.cookie,Origin:base,'Content-Type':'application/json'},body:JSON.stringify(concurrent)})));
 equal(simultaneous.map(r=>r.status).sort(),[200,409]);await Promise.all(simultaneous.map(r=>r.arrayBuffer()));
