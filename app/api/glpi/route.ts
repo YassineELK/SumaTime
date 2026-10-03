@@ -4,7 +4,11 @@ import { acknowledgeGlpiCreation, createGlpiTicket, glpiCreationOptions, glpiWri
 export const dynamic = 'force-dynamic';
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
 async function who() { const me = await getMember(); if (!me) throw new AuthError('Reconnectez-vous.', 401); if (me.must_change) throw new AuthError('Changez votre mot de passe provisoire.', 403); return me; }
-const fail = (e: unknown) => json({ error: e instanceof AuthError ? e.message : 'Connexion GLPI indisponible.', uncertain: e instanceof GlpiCreationUncertain }, e instanceof AuthError ? e.status : 503);
+const fail = (e: unknown) => json({
+  error: e instanceof AuthError ? e.message : 'Connexion GLPI indisponible.',
+  uncertain: e instanceof GlpiCreationUncertain,
+  ...(e instanceof GlpiCreationUncertain && e.operation ? { operation: e.operation } : {}),
+}, e instanceof AuthError ? e.status : 503);
 export async function GET(request: Request) {
   try {
     const me = await who(), config = glpiConfig(), url = new URL(request.url);
@@ -23,8 +27,12 @@ export async function POST(request: Request) {
     const raw = await request.text(); if (raw.length > 18000) throw new AuthError('Formulaire trop long.');
     let body; try { body = JSON.parse(raw); } catch { throw new AuthError('Formulaire invalide.'); }
     if (!body || typeof body !== 'object') throw new AuthError('Formulaire invalide.');
-    if (body.action === 'acknowledgeCreation') { if (typeof body.request_id !== 'string' || !/^[a-f0-9-]{36}$/.test(body.request_id)) throw new AuthError('Demande invalide.'); acknowledgeGlpiCreation(me.id, glpiConfig()?.api, body.request_id); return json({ ok: true }); }
-    if (body.action === 'createTicket') { const config=glpiConfig(); if(!config)throw new AuthError('GLPI doit être configuré.',409); rateLimit('glpi-create:'+me.id,10,60000); return json({ticket:await createGlpiTicket(me.id,config,body)}); }
+    if (body.action === 'acknowledgeCreation') {
+      if (typeof body.request_id !== 'string' || !/^[a-f0-9-]{36}$/.test(body.request_id)) throw new AuthError('Demande invalide.');
+      const ticketId = Number.isSafeInteger(body.ticket_id) ? body.ticket_id as number : undefined;
+      return json({ ok: acknowledgeGlpiCreation(me.id, glpiConfig()?.api, body.request_id, ticketId) });
+    }
+    if (body.action === 'createTicket') { const config=glpiConfig(); if(!config)throw new AuthError('GLPI doit être configuré.',409); rateLimit('glpi-create:'+me.id,10,60000); return json(await createGlpiTicket(me.id,config,body)); }
     if (body.action === 'disconnect') sqlite().prepare('DELETE FROM glpi_credentials WHERE member_id=?').run(me.id);
     else if (body.action === 'connect') {
       const config = glpiConfig(); if (!config) throw new AuthError('GLPI doit être configuré sur le serveur.', 409);

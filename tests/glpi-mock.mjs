@@ -5,7 +5,8 @@ export async function mockGlpi(port=8790,allowedEntities=[4,9]) {
   const tickets=Array.from({length:13},(_,i)=>({id:101+i,name:i===0?'Configurer le VPN du nouveau collaborateur':i===1?'Diagnostic réseau — agence Bruxelles':i===2?'Installation du poste et accès Microsoft 365':'Intervention de démonstration '+(i+1),status:i===2?5:i%4+1,entities_id:i===1?(allowedEntities[1]??allowedEntities[0]):allowedEntities[0]}));
   const server=createServer((req,res)=>{
     const url=new URL(req.url,'http://localhost');const path=url.pathname.replace('/apirest.php/','');
-    calls.push({path,method:req.method,user:sessions.get(req.headers['session-token'])||null,query:url.search});
+    const call={path,method:req.method,user:sessions.get(req.headers['session-token'])||null,query:url.search};
+    calls.push(call);
     const send=(code,data)=>{res.writeHead(code,{'Content-Type':'application/json'});res.end(JSON.stringify(data));};
     if(!['GET','POST'].includes(req.method))return send(405,{error:'Method refused'});
     if(req.headers['app-token']!=='mock-app-token')return send(403,['BAD_APP_TOKEN','secret should never leak']);
@@ -24,6 +25,7 @@ export async function mockGlpi(port=8790,allowedEntities=[4,9]) {
     if(req.method==='POST'){
       let raw='';req.on('data',chunk=>raw+=chunk);req.on('end',()=>{
         let body;try{body=JSON.parse(raw);}catch{return send(400,{error:'Invalid JSON'});}
+        call.body=body;
         const entities=user==='bob-test-token'?[allowedEntities[1]??allowedEntities[0]]:allowedEntities;
         if(path==='changeActiveEntities'){if(!entities.includes(body.entities_id))return send(403,['FORBIDDEN']);if(user==='entity-false-test-token')return send(200,false);if(user==='entity-http-error-test-token')return send(503,{error:'MOCK_ENTITY_ERROR'});if(user==='entity-malformed-test-token')return send(200,{ok:true});activeEntities.set(req.headers['session-token'],body.entities_id);return send(200,true);}
         if(path==='Ticket'){

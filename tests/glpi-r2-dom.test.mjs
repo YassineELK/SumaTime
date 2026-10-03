@@ -21,13 +21,16 @@ const clients = [client];
 const accepted = [];
 let pending = null;
 let creates = 0;
+let acknowledgements = 0;
 let completedOnLoss = false;
 let completedVisible = false;
+let deferPending = false;
+let deferredPendingResolve = null;
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input);
   if (url === '/api/glpi' && init.method === 'POST') {
     const body = JSON.parse(String(init.body));
-    if (body.action === 'acknowledgeCreation') return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    if (body.action === 'acknowledgeCreation') { acknowledgements += 1; return new Response(JSON.stringify({ ok: true }), { status: 200 }); }
     assert.equal(body.action, 'createTicket');
     const value = { request_id: body.request_id, client_id: body.client_id, title: body.title, description: body.description, type: body.type, urgency: body.urgency, category: body.category };
     if (!accepted.length) {
@@ -41,6 +44,10 @@ globalThis.fetch = async (input, init = {}) => {
     return new Response(JSON.stringify({ ticket: { id: 9100, title: value.title, status: 1, entity: 4, url: 'http://127.0.0.1:8792/front/ticket.form.php?id=9100', client_id: client.id, client: client.name } }), { status: 200 });
   }
   if (url === '/api/glpi?uncertain=1') {
+    if (deferPending) {
+      deferPending = false;
+      return new Promise(resolve => { deferredPendingResolve = resolve; });
+    }
     const request = pending && (!pending.ticket || completedVisible) ? (() => { const { ticket, ...payload } = pending; return { payload, ...(ticket ? { ticket } : {}), createdAt: new Date().toISOString() }; })() : null;
     return new Response(JSON.stringify({ requests: request ? [request] : [], blocked: false }), { status: 200 });
   }
@@ -77,6 +84,7 @@ test('quota failure remount consults the member-scoped Next API and reconciles o
   const blockedStorage = { getItem: () => null, setItem: () => { throw Object.assign(new Error('quota'), { name: 'QuotaExceededError' }); }, removeItem: () => {} };
   completedOnLoss = true;
   completedVisible = false;
+  acknowledgements = 0;
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, writable: true, value: blockedStorage });
   Object.defineProperty(dom.window, 'localStorage', { configurable: true, writable: true, value: blockedStorage });
   const container = document.getElementById('root-a');
@@ -99,6 +107,9 @@ test('quota failure remount consults the member-scoped Next API and reconciles o
   assert.match(document.body.textContent, /Résultat récupéré depuis le serveur membre-scopé/);
   assert.match(document.body.textContent, /Ticket créé dans GLPI/);
   assert.equal(creates, 1, 'remount and reconciliation must not emit a second mock Ticket creation');
+  assert.equal(acknowledgements, 0, 'mount, polling, and recovery must not acknowledge before explicit consumption');
+  await act(async () => { click(button('Utiliser ce ticket')); await wait(20); });
+  assert.equal(acknowledgements, 1, 'only explicit ticket consumption may acknowledge the authoritative result');
   await act(async () => { root.render(null); await wait(0); });
 });
 
@@ -128,4 +139,48 @@ test('two mounted creators receive one member-scoped uncertain operation immedia
   assert.match(document.body.textContent, /Résultat incertain/);
   assert.equal([...document.querySelectorAll('button')].filter(value => value.textContent?.includes('Récupérer le résultat')).length, 2);
   await act(async () => { rootA.render(null); rootB.render(null); await wait(0); });
+});
+
+test('polling never overwrites an explicitly distinct draft', { concurrency: false }, async () => {
+  accepted.length = 0;
+  pending = { request_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', client_id: client.id, title: 'OLD SERVER TITLE', description: 'OLD SERVER DESCRIPTION', type: 1, urgency: 3, category: 1 };
+  creates = 0;
+  completedOnLoss = false;
+  completedVisible = false;
+  acknowledgements = 0;
+  const container = document.getElementById('root-a');
+  const root = create(ticket(), container);
+  await settle(30);
+  await act(async () => { click(button('Nouveau ticket GLPI')); await wait(30); });
+  assert.match(document.body.textContent, /Résultat incertain/);
+  await act(async () => { click(button('Commencer une nouvelle demande distincte')); await wait(10); });
+  setField(document.querySelector('input[maxlength="250"]'), 'NEW DRAFT TITLE');
+  setField(document.querySelector('textarea'), 'NEW DRAFT DESCRIPTION');
+  await settle(2150);
+  assert.equal(document.querySelector('input[maxlength="250"]')?.value, 'NEW DRAFT TITLE');
+  assert.equal(document.querySelector('textarea')?.value, 'NEW DRAFT DESCRIPTION');
+  await act(async () => { root.render(null); await wait(0); });
+  pending = null;
+});
+
+test('a late Alice response cannot mutate a reused component rendered for Bob', { concurrency: false }, async () => {
+  accepted.length = 0;
+  pending = null;
+  creates = 0;
+  completedOnLoss = false;
+  completedVisible = false;
+  acknowledgements = 0;
+  deferPending = true;
+  deferredPendingResolve = null;
+  const alicePayload = { request_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', client_id: client.id, title: 'ALICE PRIVATE TITLE', description: 'ALICE PRIVATE DESCRIPTION', type: 1, urgency: 3, category: 1 };
+  const container = document.getElementById('root-a');
+  const root = create(ticket('alice-member'), container);
+  await settle(20);
+  assert.equal(typeof deferredPendingResolve, 'function');
+  await act(async () => { root.render(ticket('bob-member')); await wait(20); });
+  const aliceResponse = new Response(JSON.stringify({ requests: [{ payload: alicePayload, createdAt: new Date().toISOString() }], blocked: false }), { status: 200 });
+  deferredPendingResolve(aliceResponse);
+  await settle(30);
+  assert.doesNotMatch(document.body.textContent, /ALICE PRIVATE TITLE|ALICE PRIVATE DESCRIPTION/);
+  await act(async () => { root.render(null); await wait(0); });
 });

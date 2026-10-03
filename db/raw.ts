@@ -37,12 +37,54 @@ export function sqlite() {
   db.exec(`CREATE TABLE IF NOT EXISTS glpi_creations (
     request_id TEXT PRIMARY KEY, member_id TEXT NOT NULL REFERENCES members(id), api_url TEXT NOT NULL,
     payload_hash TEXT NOT NULL, payload_json TEXT, result_json TEXT, acknowledged_at TEXT, created_at TEXT NOT NULL);`);
+  // glpi_creations is deliberately migrated here as well as being created
+  // above: installations from the first v0.3 builds predate the payload and
+  // acknowledgement columns.  A legacy row with no payload cannot be safely
+  // replayed or matched to a new request.  If it already contains a result,
+  // (and, defensively, if it is an old result-less row too) mark it as
+  // legacy-safe instead of exposing a permanent, unrecoverable blocker.
   const creationColumns = db.prepare('PRAGMA table_info(glpi_creations)').all() as { name: string }[];
-  if (!creationColumns.some(column => column.name === 'payload_json')) {
-    db.exec('ALTER TABLE glpi_creations ADD COLUMN payload_json TEXT');
-  }
-  if (!creationColumns.some(column => column.name === 'acknowledged_at')) {
-    db.exec('ALTER TABLE glpi_creations ADD COLUMN acknowledged_at TEXT');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (!creationColumns.some(column => column.name === 'payload_json')) {
+      db.exec('ALTER TABLE glpi_creations ADD COLUMN payload_json TEXT');
+    }
+    if (!creationColumns.some(column => column.name === 'acknowledged_at')) {
+      db.exec('ALTER TABLE glpi_creations ADD COLUMN acknowledged_at TEXT');
+    }
+    db.exec(`UPDATE glpi_creations
+      SET acknowledged_at=COALESCE(acknowledged_at, created_at)
+      WHERE payload_json IS NULL AND acknowledged_at IS NULL`);
+
+    // Older builds had no fingerprint uniqueness.  Keep the oldest
+    // authoritative row for each still-live operation and make any duplicate
+    // rows legacy-safe before installing the database-enforced reservation.
+    const duplicates = db.prepare(`SELECT member_id,api_url,payload_hash
+      FROM glpi_creations
+      WHERE payload_json IS NOT NULL AND acknowledged_at IS NULL
+      GROUP BY member_id,api_url,payload_hash HAVING COUNT(*) > 1`).all() as { member_id: string; api_url: string; payload_hash: string }[];
+    for (const duplicate of duplicates) {
+      const rows = db.prepare(`SELECT request_id,result_json,created_at
+        FROM glpi_creations
+        WHERE member_id=? AND api_url=? AND payload_hash=? AND payload_json IS NOT NULL AND acknowledged_at IS NULL
+        ORDER BY CASE WHEN result_json IS NULL THEN 1 ELSE 0 END,created_at,request_id`).all(duplicate.member_id, duplicate.api_url, duplicate.payload_hash) as { request_id: string; result_json: string | null; created_at: string }[];
+      const winner = rows[0];
+      if (!winner) continue;
+      for (const loser of rows.slice(1)) {
+        if (!winner.result_json && loser.result_json) {
+          db.prepare('UPDATE glpi_creations SET result_json=? WHERE request_id=?').run(loser.result_json, winner.request_id);
+          winner.result_json = loser.result_json;
+        }
+        db.prepare('UPDATE glpi_creations SET acknowledged_at=COALESCE(acknowledged_at,created_at) WHERE request_id=?').run(loser.request_id);
+      }
+    }
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS glpi_creations_live_fingerprint_unique
+      ON glpi_creations(member_id,api_url,payload_hash)
+      WHERE acknowledged_at IS NULL AND payload_json IS NOT NULL`);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
   }
   globalDb.timeDatabase = db;
   const tokenFile = resolve(dirname(file), 'setup-token.txt');

@@ -1,17 +1,19 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { Check, ExternalLink, Plus } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import type { Client } from '@/lib/types';
-import type { GlpiTicket } from '@/lib/glpi';
+import type { GlpiCreationOperation, GlpiTicket } from '@/lib/glpi';
 import { announcePendingGlpiRequest, getGlpiDraftStorageStatus, readPendingGlpiRequest, removePendingGlpiRequest, savePendingGlpiRequest, subscribePendingGlpiRequest, type GlpiDraftStorageStatus, type GlpiRequestPayload, type PendingGlpiRequest } from '@/lib/glpi-draft';
 
 type Status = { configured: boolean; connected: boolean; canCreate: boolean; web: string | null };
 type Category = { id: number; name: string };
 type Form = GlpiRequestPayload;
-type ServerRequest = { payload: GlpiRequestPayload; createdAt: string; ticket?: GlpiTicket };
-type ApiValue = { error?: string; uncertain?: boolean; ticket?: GlpiTicket; categories?: Category[]; limited?: boolean; requests?: ServerRequest[]; blocked?: boolean } & Partial<Status>;
+type ServerRequest = GlpiCreationOperation;
+type ApiValue = { error?: string; uncertain?: boolean; ticket?: GlpiTicket; operation?: ServerRequest; categories?: Category[]; limited?: boolean; requests?: ServerRequest[]; blocked?: boolean } & Partial<Status>;
+type AsyncKind = 'pending' | 'status' | 'options' | 'submit' | 'ack';
+type UiMode = 'idle' | 'draft' | 'uncertain' | 'result';
 
 function newForm(clientId: string, description: string): Form {
   return { request_id: crypto.randomUUID(), client_id: clientId, title: '', description, type: 1, urgency: 3, category: 0 };
@@ -22,11 +24,12 @@ function blankForm(description: string): Form {
 }
 
 function canonical(form: Form): Form {
-  return { ...form, title: form.title.trim(), description: form.description.trim() };
+  return { ...form, client_id: form.client_id.trim(), title: form.title.trim(), description: form.description.trim() };
 }
 
 export default function NewGlpiTicket({ clients, memberId = '', initialClient = '', initialDescription = '', disabled = false, onCreated }: { clients: Client[]; memberId?: string; initialClient?: string; initialDescription?: string; disabled?: boolean; onCreated: (ticket: GlpiTicket) => void }) {
   const [initialPending] = useState<PendingGlpiRequest | null>(() => readPendingGlpiRequest(initialClient, initialDescription, undefined, memberId));
+  const initialMode: UiMode = initialPending ? 'uncertain' : 'idle';
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
   const [form, setForm] = useState<Form>(() => initialPending?.payload || blankForm(initialDescription));
@@ -34,8 +37,9 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [uncertain, setUncertain] = useState(!!initialPending);
+  const [uncertain, setUncertain] = useState(initialMode === 'uncertain');
   const [created, setCreated] = useState<GlpiTicket | null>(null);
+  const [mode, setModeState] = useState<UiMode>(initialMode);
   const [storageIssue, setStorageIssue] = useState<Exclude<GlpiDraftStorageStatus, 'ok'> | null>(() => {
     const value = getGlpiDraftStorageStatus(memberId);
     return value === 'ok' ? null : value;
@@ -44,153 +48,267 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
   const [serverBlocked, setServerBlocked] = useState(false);
   const [pendingCheckFailed, setPendingCheckFailed] = useState(false);
   const sending = useRef(false);
-  const uncertainPayload = useRef<Form | null>(initialPending?.payload || null);
-  const currentMember = useRef(memberId);
   const mounted = useRef(false);
+  const currentMember = useRef(memberId);
+  const memberEpoch = useRef(0);
+  const modeRef = useRef<UiMode>(initialMode);
+  const operation = useRef<Form | null>(initialPending?.payload || null);
+  const uncertainPayload = useRef<Form | null>(initialPending?.payload || null);
+  const currentCreated = useRef<GlpiTicket | null>(null);
+  const draftOwned = useRef(false);
+  const serverPending = useRef<ServerRequest | null>(null);
+  const serverBlockedRef = useRef(false);
+  const controllers = useRef(new Map<AsyncKind, AbortController>());
+  const sequences = useRef<Record<AsyncKind, number>>({ pending: 0, status: 0, options: 0, submit: 0, ack: 0 });
+
+  const setMode = useCallback((value: UiMode) => {
+    modeRef.current = value;
+    setModeState(value);
+  }, []);
+
+  const abortRequests = useCallback(() => {
+    controllers.current.forEach(controller => controller.abort());
+    controllers.current.clear();
+    (Object.keys(sequences.current) as AsyncKind[]).forEach(kind => { sequences.current[kind] += 1; });
+  }, []);
+
+  const begin = useCallback((kind: AsyncKind) => {
+    controllers.current.get(kind)?.abort();
+    const controller = new AbortController();
+    controllers.current.set(kind, controller);
+    const sequence = ++sequences.current[kind];
+    const epoch = memberEpoch.current;
+    const member = currentMember.current;
+    return { controller, epoch, sequence, member, valid: () => mounted.current && !controller.signal.aborted && memberEpoch.current === epoch && currentMember.current === member && sequences.current[kind] === sequence };
+  }, []);
+
+  const finish = useCallback((kind: AsyncKind, controller: AbortController) => {
+    if (controllers.current.get(kind) === controller) controllers.current.delete(kind);
+  }, []);
 
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
+    return () => {
+      mounted.current = false;
+      memberEpoch.current += 1;
+      abortRequests();
+    };
+  }, [abortRequests]);
+
+  // A member switch is a security boundary, even if the parent keeps this
+  // component mounted. Clear Alice's visible state before any Bob request can
+  // settle, and abort every request captured under Alice's epoch.
+  useLayoutEffect(() => {
+    if (currentMember.current === memberId) return;
+    memberEpoch.current += 1;
+    abortRequests();
+    currentMember.current = memberId;
+    sending.current = false;
+    draftOwned.current = false;
+    operation.current = null;
+    uncertainPayload.current = null;
+    currentCreated.current = null;
+    serverPending.current = null;
+    serverBlockedRef.current = false;
+    setOpen(false);
+    setStatus(null);
+    setCategories([]);
+    setForm(blankForm(initialDescription));
+    setMode('idle');
+    setUncertain(false);
+    setCreated(null);
+    setBusy(false);
+    setLoading(false);
+    setError('');
+    setPendingChecked(false);
+    setPendingCheckFailed(false);
+    setServerBlocked(false);
+    const storage = getGlpiDraftStorageStatus(memberId);
+    setStorageIssue(storage === 'ok' ? null : storage);
+  }, [abortRequests, initialDescription, memberId, setMode]);
 
   const applyPending = useCallback((pendingRequest: PendingGlpiRequest) => {
-    if (!mounted.current) return;
+    const requestId = pendingRequest.payload.request_id;
+    if (draftOwned.current && operation.current?.request_id !== requestId) {
+      serverPending.current = { payload: pendingRequest.payload, createdAt: new Date(pendingRequest.savedAt).toISOString() };
+      return;
+    }
+    if ((modeRef.current === 'uncertain' || modeRef.current === 'result') && operation.current?.request_id !== requestId) {
+      serverPending.current = { payload: pendingRequest.payload, createdAt: new Date(pendingRequest.savedAt).toISOString() };
+      return;
+    }
+    operation.current = pendingRequest.payload;
     uncertainPayload.current = pendingRequest.payload;
+    currentCreated.current = null;
     setForm(pendingRequest.payload);
     setUncertain(true);
     setCreated(null);
+    setMode('uncertain');
     setCategories([]);
     setError('Résultat incertain : la demande conservée utilise le même UUID et le même payload. Récupérez son résultat avant toute nouvelle demande.');
-  }, []);
-
-  const acknowledge = useCallback((requestId: string) => {
-    void fetch('/api/glpi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'acknowledgeCreation', request_id: requestId }) }).catch(() => {});
-  }, []);
+  }, [setMode]);
 
   const applyServerRequest = useCallback((request: ServerRequest) => {
-    const value = { payload: request.payload, savedAt: Date.parse(request.createdAt) || Date.now() };
+    const requestId = request.payload.request_id;
+    if (draftOwned.current && operation.current?.request_id !== requestId) {
+      serverPending.current = request;
+      return;
+    }
+    if ((modeRef.current === 'uncertain' || modeRef.current === 'result') && operation.current?.request_id !== requestId) {
+      serverPending.current = request;
+      return;
+    }
+    operation.current = request.payload;
+    uncertainPayload.current = request.payload;
+    serverPending.current = request;
+    setForm(request.payload);
     if (request.ticket) {
-      uncertainPayload.current = request.payload;
-      setForm(request.payload);
-      setUncertain(false);
+      currentCreated.current = request.ticket;
       setCreated(request.ticket);
-      setError('Résultat récupéré depuis le serveur membre-scopé. Aucun nouveau ticket ne sera créé.');
-      acknowledge(request.payload.request_id);
-    } else applyPending(value);
-  }, [acknowledge, applyPending]);
+      setUncertain(false);
+      setMode('result');
+      setError('Résultat récupéré depuis le serveur membre-scopé. Confirmez sa consommation pour clore cette opération.');
+    } else {
+      currentCreated.current = null;
+      setCreated(null);
+      setUncertain(true);
+      setMode('uncertain');
+      setError('Résultat incertain : la demande conservée utilise le même UUID et le même payload. Récupérez son résultat avant toute nouvelle demande.');
+    }
+  }, [setMode]);
 
-  const refreshPending = useCallback(async () => {
-    if (!mounted.current) return null;
-    setPendingChecked(false);
+  const refreshPending = useCallback(async (adopt = true) => {
+    const request = begin('pending');
+    if (!request.valid()) return null;
     try {
-      const response = await fetch('/api/glpi?uncertain=1', { cache: 'no-store' });
+      const response = await fetch('/api/glpi?uncertain=1', { cache: 'no-store', signal: request.controller.signal });
       const value = await response.json() as ApiValue;
+      if (!request.valid()) return null;
       if (!response.ok) throw new Error(value.error || 'L’état GLPI ne peut pas être vérifié.');
-      if (!mounted.current) return null;
       setPendingCheckFailed(false);
+      serverBlockedRef.current = value.blocked === true;
       setServerBlocked(value.blocked === true);
       if (value.blocked) setStorageIssue('corrupt');
       const requests = value.requests || [];
-      const matching = requests.find(item => (!initialClient || item.payload.client_id === initialClient)
-        && (!initialDescription.trim() || item.payload.description === initialDescription.trim())) || requests[0];
-      if (matching) applyServerRequest(matching);
-      setPendingChecked(true);
+      const activeId = operation.current?.request_id;
+      const matching = requests.find(item => activeId && item.payload.request_id === activeId)
+        || requests.find(item => (!initialClient || item.payload.client_id === initialClient) && (!initialDescription.trim() || item.payload.description === initialDescription.trim()))
+        || (!draftOwned.current ? requests[0] : undefined);
+      if (matching) {
+        serverPending.current = matching;
+        if (adopt || !draftOwned.current) applyServerRequest(matching);
+      }
+      if (adopt || modeRef.current !== 'draft') setPendingChecked(true);
       return matching || null;
     } catch (reason) {
-      if (!mounted.current) return null;
+      if (!request.valid() || (reason instanceof DOMException && reason.name === 'AbortError')) return null;
       setPendingCheckFailed(true);
-      setPendingChecked(true);
+      if (adopt || modeRef.current !== 'draft') setPendingChecked(true);
       setError(reason instanceof Error ? reason.message : 'L’état GLPI ne peut pas être vérifié.');
       return null;
+    } finally {
+      finish('pending', request.controller);
     }
-  }, [applyServerRequest, initialClient, initialDescription]);
+  }, [applyServerRequest, begin, finish, initialClient, initialDescription]);
 
   useEffect(() => {
-    if (currentMember.current !== memberId) {
-      currentMember.current = memberId;
-      const pending = readPendingGlpiRequest(initialClient, initialDescription, undefined, memberId);
-      uncertainPayload.current = pending?.payload || null;
-      setForm(pending?.payload || blankForm(initialDescription));
-      setUncertain(!!pending);
-      setCreated(null);
-      setError('');
-      setPendingChecked(false);
-      setPendingCheckFailed(false);
-      setServerBlocked(false);
-      setStorageIssue((value => value === 'ok' ? null : value)(getGlpiDraftStorageStatus(memberId)));
-    }
-    const pendingCheck = setTimeout(() => { void refreshPending(); }, 0);
+    const pendingCheck = setTimeout(() => { void refreshPending(true); }, 0);
     const unsubscribe = subscribePendingGlpiRequest(memberId, pending => {
-      if (pending) applyPending(pending);
-      else void refreshPending();
+      if (!mounted.current || currentMember.current !== memberId) return;
+      if (pending) {
+        if (draftOwned.current) serverPending.current = { payload: pending.payload, createdAt: new Date(pending.savedAt).toISOString() };
+        else applyPending(pending);
+      } else if (!draftOwned.current) void refreshPending(true);
     });
     return () => { clearTimeout(pendingCheck); unsubscribe(); };
-  }, [applyPending, initialClient, initialDescription, memberId, refreshPending]);
+  }, [applyPending, memberId, refreshPending]);
 
   useEffect(() => {
     if (!open) return;
-    const timer = setInterval(() => { void refreshPending(); }, 2000);
+    const timer = setInterval(() => { void refreshPending(false); }, 2000);
     return () => clearInterval(timer);
   }, [open, refreshPending]);
 
   useEffect(() => {
     if (!open) return;
-    const controller = new AbortController();
-    void fetch('/api/glpi', { cache: 'no-store', signal: controller.signal })
+    const request = begin('status');
+    void fetch('/api/glpi', { cache: 'no-store', signal: request.controller.signal })
       .then(async response => {
         const value = await response.json() as ApiValue;
+        if (!request.valid()) return;
         if (!response.ok) throw new Error(value.error || 'Connexion GLPI indisponible.');
-        if (!controller.signal.aborted) {
-          const next: Status = { configured: value.configured === true, connected: value.connected === true, canCreate: value.canCreate === true, web: value.web || null };
-          setStatus(next);
-          if (!next.connected || !next.canCreate) setLoading(false);
-        }
+        const next: Status = { configured: value.configured === true, connected: value.connected === true, canCreate: value.canCreate === true, web: value.web || null };
+        setStatus(next);
+        if (!next.connected || !next.canCreate) setLoading(false);
       })
-      .catch(reason => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Connexion GLPI indisponible.'); });
-    return () => controller.abort();
-  }, [open]);
+      .catch(reason => { if (request.valid() && !(reason instanceof DOMException && reason.name === 'AbortError')) setError(reason instanceof Error ? reason.message : 'Connexion GLPI indisponible.'); })
+      .finally(() => { finish('status', request.controller); });
+    return () => request.controller.abort();
+  }, [begin, finish, open]);
 
   useEffect(() => {
     if (!open || uncertain || !status?.connected || !status.canCreate || !form.client_id) return;
-    const controller = new AbortController();
-    void fetch('/api/glpi?' + new URLSearchParams({ createOptions: '1', client: form.client_id }), { cache: 'no-store', signal: controller.signal })
+    const request = begin('options');
+    void fetch('/api/glpi?' + new URLSearchParams({ createOptions: '1', client: form.client_id }), { cache: 'no-store', signal: request.controller.signal })
       .then(async response => {
         const value = await response.json() as ApiValue;
+        if (!request.valid()) return;
         if (!response.ok) throw new Error(value.error || 'Les catégories GLPI sont indisponibles.');
-        if (!controller.signal.aborted) {
-          setCategories(value.categories || []);
-          if (value.limited) setError('Seules les 500 premières catégories sont affichées. Utilisez GLPI si la catégorie nécessaire manque.');
-        }
+        setCategories(value.categories || []);
+        if (value.limited) setError('Seules les 500 premières catégories sont affichées. Utilisez GLPI si la catégorie nécessaire manque.');
       })
-      .catch(reason => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Les catégories GLPI sont indisponibles.'); })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
-  }, [open, status?.connected, status?.canCreate, form.client_id, uncertain]);
+      .catch(reason => { if (request.valid() && !(reason instanceof DOMException && reason.name === 'AbortError')) setError(reason instanceof Error ? reason.message : 'Les catégories GLPI sont indisponibles.'); })
+      .finally(() => { if (request.valid()) setLoading(false); finish('options', request.controller); });
+    return () => request.controller.abort();
+  }, [begin, finish, form.client_id, open, status?.canCreate, status?.connected, uncertain]);
+
+  function markDraft() {
+    if (modeRef.current !== 'draft') setMode('draft');
+    draftOwned.current = true;
+    setError('');
+  }
+
+  function updateForm(patch: Partial<Form>) {
+    markDraft();
+    setForm(value => ({ ...value, ...patch }));
+  }
 
   async function openNew() {
-    if (uncertain && form.request_id) {
+    if (modeRef.current === 'uncertain' || modeRef.current === 'result') {
+      setOpen(true);
+      return;
+    }
+    if (modeRef.current === 'draft') {
       setOpen(true);
       return;
     }
     setOpen(true);
-    const serverPending = await refreshPending();
-    if (!mounted.current) return;
-    if (serverPending) return;
+    setPendingChecked(false);
+    setPendingCheckFailed(false);
+    setError('');
+    const found = await refreshPending(true);
+    if (!mounted.current || currentMember.current !== memberId) return;
+    if (found || operation.current || serverBlockedRef.current) return;
     const clientId = clients.some(client => client.id === initialClient && client.active && client.glpi_entity_id !== null) ? initialClient : '';
+    draftOwned.current = true;
+    setMode('draft');
     setForm(newForm(clientId, initialDescription));
     uncertainPayload.current = null;
     setCreated(null);
+    currentCreated.current = null;
     setUncertain(false);
-    setError('');
     setCategories([]);
     setLoading(!!clientId);
-    setOpen(true);
   }
 
   function startDistinctRequest() {
     const clientId = clients.some(client => client.id === form.client_id && client.active && client.glpi_entity_id !== null) ? form.client_id : '';
+    draftOwned.current = true;
+    operation.current = null;
+    setMode('draft');
     setForm(newForm(clientId, ''));
     uncertainPayload.current = null;
+    currentCreated.current = null;
     setCategories([]);
     setUncertain(false);
     setCreated(null);
@@ -199,17 +317,17 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
   }
 
   function updateClient(clientId: string) {
-    setForm(value => ({ ...value, client_id: clientId, category: 0 }));
+    updateForm({ client_id: clientId, category: 0 });
     setCategories([]);
-    setError('');
     setLoading(!!clientId);
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     event.stopPropagation();
-    if (sending.current || uncertain || created) return;
-    if (serverBlocked || pendingCheckFailed || !pendingChecked) {
+    if (sending.current || modeRef.current !== 'draft' || created) return;
+    const blockedForForm = serverBlocked;
+    if (blockedForForm || pendingCheckFailed || !pendingChecked) {
       setError('L’état de cette demande ne peut pas être vérifié de façon sûre. Vérifiez votre connexion avant de créer un ticket.');
       return;
     }
@@ -218,33 +336,53 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     setError('');
     const payload = canonical(form);
     setForm(payload);
-    // Reserve the exact canonical request before sending. If the browser or
-    // network disappears after GLPI accepted it, remounting still has the
-    // identity needed for a safe idempotent reconciliation.
     const stored = savePendingGlpiRequest(payload, undefined, memberId);
     if (!stored.ok) setStorageIssue(stored.reason);
     announcePendingGlpiRequest(memberId, { payload, savedAt: Date.now() });
+    const request = begin('submit');
     let certainResponse = false;
     try {
-      const response = await fetch('/api/glpi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, action: 'createTicket' }) });
-      let value: ApiValue;
-      try { value = await response.json() as ApiValue; } catch { throw new Error('La réponse GLPI est illisible.'); }
+      const response = await fetch('/api/glpi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, action: 'createTicket' }), signal: request.controller.signal });
+      const value = await response.json() as ApiValue;
+      if (!request.valid()) return;
       if (!response.ok) {
         certainResponse = value.uncertain !== true;
-        if (value.uncertain) setUncertain(true);
+        const authoritative = value.operation?.payload || payload;
+        if (value.operation) {
+          operation.current = authoritative;
+          uncertainPayload.current = authoritative;
+          setForm(authoritative);
+        }
+        if (value.uncertain) {
+          draftOwned.current = false;
+          setUncertain(true);
+          setMode('uncertain');
+        }
         throw new Error(value.error || 'Création impossible.');
       }
       if (!value.ticket) throw new Error('La réponse GLPI est incomplète.');
-      removePendingGlpiRequest(payload.request_id, undefined, memberId);
-      announcePendingGlpiRequest(memberId, null);
-      uncertainPayload.current = null;
+      const authoritative = value.operation || { payload, createdAt: new Date().toISOString(), ticket: value.ticket };
+      operation.current = authoritative.payload;
+      uncertainPayload.current = authoritative.payload;
+      serverPending.current = authoritative;
+      draftOwned.current = false;
+      setForm(authoritative.payload);
       setUncertain(false);
+      setMode('result');
+      currentCreated.current = value.ticket;
       setCreated(value.ticket);
-      acknowledge(payload.request_id);
+      removePendingGlpiRequest(authoritative.payload.request_id, undefined, memberId);
+      announcePendingGlpiRequest(memberId, null);
+      setError('Ticket créé dans GLPI. Confirmez sa consommation pour clore cette opération.');
     } catch (reason) {
+      if (!request.valid()) return;
       if (!certainResponse) {
-        uncertainPayload.current = payload;
+        draftOwned.current = false;
+        setMode('uncertain');
         setUncertain(true);
+        uncertainPayload.current = operation.current || payload;
+        operation.current = uncertainPayload.current;
+        setForm(uncertainPayload.current);
         setError('Résultat incertain : la demande a peut-être été acceptée par GLPI. Vérifiez vos tickets avant toute nouvelle demande.');
       } else {
         removePendingGlpiRequest(payload.request_id, undefined, memberId);
@@ -252,44 +390,98 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
         setError(reason instanceof Error ? reason.message : 'Création refusée. Corrigez le formulaire puis réessayez.');
       }
     } finally {
-      sending.current = false;
-      setBusy(false);
+      if (request.valid()) {
+        sending.current = false;
+        setBusy(false);
+      }
+      finish('submit', request.controller);
     }
   }
 
   async function reconcile() {
-    if (sending.current || !uncertain) return;
+    if (sending.current || modeRef.current !== 'uncertain') return;
+    const payload = uncertainPayload.current || operation.current;
+    if (!payload) return;
     sending.current = true;
     setBusy(true);
     setError('');
+    const request = begin('submit');
     try {
-      const payload = uncertainPayload.current;
-      if (!payload) return;
-      setForm(payload);
-      const stored = savePendingGlpiRequest(payload, undefined, memberId);
-      if (!stored.ok) setStorageIssue(stored.reason);
-      announcePendingGlpiRequest(memberId, { payload, savedAt: Date.now() });
-      const response = await fetch('/api/glpi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, action: 'createTicket' }) });
+      const response = await fetch('/api/glpi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, action: 'createTicket' }), signal: request.controller.signal });
       const value = await response.json() as ApiValue;
-      if (!response.ok) throw new Error(value.error || 'Le résultat reste incertain.');
+      if (!request.valid()) return;
+      if (!response.ok) {
+        if (value.operation?.payload) {
+          operation.current = value.operation.payload;
+          uncertainPayload.current = value.operation.payload;
+          setForm(value.operation.payload);
+        }
+        throw new Error(value.error || 'Le résultat reste incertain.');
+      }
       if (!value.ticket) throw new Error('Le résultat reste incertain.');
-      setForm(payload);
+      const authoritative = value.operation || { payload, createdAt: new Date().toISOString(), ticket: value.ticket };
+      operation.current = authoritative.payload;
+      uncertainPayload.current = authoritative.payload;
+      serverPending.current = authoritative;
+      draftOwned.current = false;
+      setForm(authoritative.payload);
       setCreated(value.ticket);
+      currentCreated.current = value.ticket;
       setUncertain(false);
-      uncertainPayload.current = null;
-      removePendingGlpiRequest(payload.request_id, undefined, memberId);
+      setMode('result');
+      removePendingGlpiRequest(authoritative.payload.request_id, undefined, memberId);
       announcePendingGlpiRequest(memberId, null);
-      acknowledge(payload.request_id);
+      setError('Résultat récupéré explicitement. Confirmez sa consommation pour clore cette opération.');
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Le résultat reste incertain. Vérifiez vos tickets dans GLPI.');
+      if (request.valid()) setError(reason instanceof Error ? reason.message : 'Le résultat reste incertain. Vérifiez vos tickets dans GLPI.');
     } finally {
-      sending.current = false;
-      setBusy(false);
+      if (request.valid()) {
+        sending.current = false;
+        setBusy(false);
+      }
+      finish('submit', request.controller);
     }
   }
 
+  async function consumeCreated() {
+    const ticket = currentCreated.current;
+    const payload = operation.current;
+    if (sending.current || !ticket || !payload) return;
+    sending.current = true;
+    setBusy(true);
+    setError('');
+    const request = begin('ack');
+    try {
+      const response = await fetch('/api/glpi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'acknowledgeCreation', request_id: payload.request_id, ticket_id: ticket.id }), signal: request.controller.signal });
+      const value = await response.json() as ApiValue & { ok?: boolean };
+      if (!request.valid()) return;
+      if (!response.ok || value.ok !== true) throw new Error('Le résultat n’a pas pu être confirmé. Il reste conservé pour récupération.');
+      removePendingGlpiRequest(payload.request_id, undefined, memberId);
+      announcePendingGlpiRequest(memberId, null);
+      operation.current = null;
+      uncertainPayload.current = null;
+      serverPending.current = null;
+      currentCreated.current = null;
+      draftOwned.current = false;
+      setCreated(null);
+      setUncertain(false);
+      setMode('idle');
+      setOpen(false);
+      onCreated(ticket);
+    } catch (reason) {
+      if (request.valid()) setError(reason instanceof Error ? reason.message : 'Le résultat n’a pas pu être confirmé.');
+    } finally {
+      if (request.valid()) {
+        sending.current = false;
+        setBusy(false);
+      }
+      finish('ack', request.controller);
+    }
+  }
+
+  const blockedForForm = serverBlocked || (pendingCheckFailed && mode !== 'draft') || (!pendingChecked && mode !== 'draft');
   return <>
-    <button type="button" className="text-button" disabled={disabled} onClick={openNew}><Plus size={15} />Nouveau ticket GLPI</button>
+    <button type="button" className="text-button" disabled={disabled} onClick={() => void openNew()}><Plus size={15} />Nouveau ticket GLPI</button>
     <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value); }}>
       <DialogContent className="calendar-dialog quick-dialog" onInteractOutside={event => event.preventDefault()} onEscapeKeyDown={event => { if (busy) event.preventDefault(); }}>
         <DialogTitle>{created ? 'Ticket créé dans GLPI' : uncertain ? 'Résultat incertain' : 'Créer un ticket GLPI'}</DialogTitle>
@@ -297,17 +489,17 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
         {error && <div className="alert error" role="alert">{error}</div>}
         {storageIssue && <div className="alert error" role="status">Le stockage local de ce navigateur est indisponible ou invalide. L’état serveur membre-scopé est utilisé ; aucune nouvelle création ne sera envoyée sans vérification.</div>}
         {uncertain && !created && <div className="alert error glpi-uncertain" role="status"><strong>Résultat incertain</strong><span>La réponse de GLPI n’a pas pu être confirmée. Le même UUID et le même payload restent conservés ; aucun renvoi automatique ne sera effectué.</span><div className="quick-actions"><button type="button" className="secondary" disabled={busy} onClick={() => void reconcile()}>Récupérer le résultat</button>{status?.web && <a href={status.web} target="_blank" rel="noreferrer" className="text-button">Vérifier dans GLPI</a>}</div><button type="button" className="text-button" disabled={busy} onClick={startDistinctRequest}>Commencer une nouvelle demande distincte</button></div>}
-        {created ? <div className="glpi-created"><p role="status"><Check size={18} />GLPI-{created.id} · {created.title}</p><a href={created.url} target="_blank" rel="noreferrer" className="text-button"><ExternalLink size={16} />Ouvrir dans GLPI</a><div className="quick-actions"><button type="button" className="secondary" onClick={() => setOpen(false)}>Fermer</button><button type="button" className="primary" onClick={() => { onCreated(created); setOpen(false); }}>Utiliser ce ticket</button></div></div> : !status ? <p>Vérification de la connexion GLPI…</p> : !status.configured || !status.connected ? <p>Connectez d’abord votre compte depuis « Mes tickets GLPI ».</p> : !status.canCreate ? <p>La création de tickets est désactivée dans cet environnement. Votre administrateur peut l’activer pour une instance GLPI autorisée.</p> : <form className="quick-form" onSubmit={submit}>
-          <fieldset disabled={busy || uncertain || serverBlocked || pendingCheckFailed || !pendingChecked}>
+        {created ? <div className="glpi-created"><p role="status"><Check size={18} />GLPI-{created.id} · {created.title}</p><a href={created.url} target="_blank" rel="noreferrer" className="text-button"><ExternalLink size={16} />Ouvrir dans GLPI</a><div className="quick-actions"><button type="button" className="secondary" disabled={busy} onClick={() => setOpen(false)}>Fermer</button><button type="button" className="primary" disabled={busy} onClick={() => void consumeCreated()}>Utiliser ce ticket</button></div><button type="button" className="text-button" disabled={busy} onClick={startDistinctRequest}>Commencer une nouvelle demande distincte</button></div> : !status ? <p>Vérification de la connexion GLPI…</p> : !status.configured || !status.connected ? <p>Connectez d’abord votre compte depuis « Mes tickets GLPI ».</p> : !status.canCreate ? <p>La création de tickets est désactivée dans cet environnement. Votre administrateur peut l’activer pour une instance GLPI autorisée.</p> : <form className="quick-form" onSubmit={submit}>
+          <fieldset disabled={busy || uncertain || blockedForForm}>
             <label>Client<select required value={form.client_id} onChange={event => updateClient(event.target.value)}><option value="">Choisir le client</option>{clients.filter(client => client.active && client.glpi_entity_id !== null).map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
-            <label>Type<select value={form.type} onChange={event => setForm({ ...form, type: Number(event.target.value) })}><option value={1}>Incident</option><option value={2}>Demande</option></select></label>
-            <label className="span-all">Titre<input autoFocus required maxLength={250} value={form.title} onChange={event => setForm({ ...form, title: event.target.value })} /></label>
-            <label className="span-all">Description<textarea required rows={4} maxLength={4000} value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} /></label>
-            <label>Catégorie<select disabled={loading} value={form.category} onChange={event => setForm({ ...form, category: Number(event.target.value) })}><option value={0}>{loading ? 'Chargement…' : 'Non précisée'}</option>{categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
-            <label>Urgence<select value={form.urgency} onChange={event => setForm({ ...form, urgency: Number(event.target.value) })}>{['Très basse', 'Basse', 'Moyenne', 'Haute', 'Très haute'].map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label>
+            <label>Type<select value={form.type} onChange={event => updateForm({ type: Number(event.target.value) })}><option value={1}>Incident</option><option value={2}>Demande</option></select></label>
+            <label className="span-all">Titre<input autoFocus required maxLength={250} value={form.title} onChange={event => updateForm({ title: event.target.value })} /></label>
+            <label className="span-all">Description<textarea required rows={4} maxLength={4000} value={form.description} onChange={event => updateForm({ description: event.target.value })} /></label>
+            <label>Catégorie<select disabled={loading} value={form.category} onChange={event => updateForm({ category: Number(event.target.value) })}><option value={0}>{loading ? 'Chargement…' : 'Non précisée'}</option>{categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+            <label>Urgence<select value={form.urgency} onChange={event => updateForm({ urgency: Number(event.target.value) })}>{['Très basse', 'Basse', 'Moyenne', 'Haute', 'Très haute'].map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label>
           </fieldset>
           <p className="form-note">Seuls les clients associés à une entité GLPI sont proposés. Les règles et champs obligatoires de GLPI restent applicables.</p>
-          <div className="quick-actions"><button type="button" className="secondary" disabled={busy} onClick={() => setOpen(false)}>Fermer</button><button className="primary" disabled={busy || loading || uncertain || serverBlocked || pendingCheckFailed || !pendingChecked || !form.client_id}>{busy ? 'Création…' : 'Créer dans GLPI'}</button></div>
+          <div className="quick-actions"><button type="button" className="secondary" disabled={busy} onClick={() => setOpen(false)}>Fermer</button><button className="primary" disabled={busy || loading || uncertain || blockedForForm || !form.client_id}>{busy ? 'Création…' : 'Créer dans GLPI'}</button></div>
         </form>}
       </DialogContent>
     </Dialog>
