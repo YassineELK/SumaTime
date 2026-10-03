@@ -73,6 +73,18 @@ assert.equal((await call(alice)).entries.find(e => e.id === midnight.id).end, 14
 await call(alice, { action: 'deleteEntry', id: midnight.id, version: 1 });
 await call(alice, { ...entry, version: 1, description: 'Correction' });
 await call(alice, { ...entry, version: 1, description: 'Ancienne version' }, '/api/time', 409);
+// Undo restores only the historical range with the current version; a real concurrent edit still conflicts.
+const undoEntry = { ...entry, id: randomUUID(), ticket: 'UNDO-ME', start: '06:00', end: '06:16', description: 'Historique' };
+await call(alice, undoEntry);
+await call(alice, { ...undoEntry, version: 1, start: '07:00', end: '07:16', ticket: 'CURRENT', description: 'Changement courant' });
+await call(alice, { action: 'restoreEntryRange', id: undoEntry.id, version: 2, date, start: '06:00', end: '06:16' });
+let undoState = (await call(alice)).entries.find(value => value.id === undoEntry.id);
+assert.equal(undoState.ticket, 'CURRENT'); assert.equal(undoState.description, 'Changement courant'); assert.equal(undoState.start, 360); assert.equal(undoState.end, 376); checks += 4;
+await call(alice, { ...undoEntry, version: 3, start: '08:00', end: '08:16', ticket: 'CONCURRENT', description: 'Modification concurrente' });
+await call(alice, { action: 'restoreEntryRange', id: undoEntry.id, version: 3, date, start: '06:00', end: '06:16' }, '/api/time', 409);
+undoState = (await call(alice)).entries.find(value => value.id === undoEntry.id);
+assert.equal(undoState.ticket, 'CONCURRENT'); assert.equal(undoState.start, 480); checks += 2;
+await call(alice, { action: 'deleteEntry', id: undoEntry.id, version: 4 });
 const detail = await call(admin, null, `/api/time?from=${date}&to=${date}&export=detail`);
 assert.ok(detail.includes('"16";"30";"0,50"')); assert.ok(detail.includes("'=FORMULA-TEST")); checks += 2;
 const sum = await call(admin, null, `/api/time?from=${date}&to=${date}&export=summary`);
@@ -180,7 +192,7 @@ await call(admin, { action: 'clientActive', id: client_id, active: false });
 await call(bob, { ...entry, id: randomUUID(), start: '12:00', end: '13:00' }, '/api/time', 400);
 await call(admin, null, '/api/time?from=2020-01-01&to=2026-09-16', 400);
 // Session and credential security checks.
-const me = (await call(admin)).me;
+await call(admin);
 const bobId = members.find(m => m.email === bob[1]).id;
 await call(admin, {action:'reset',id:bobId,password:temporary}, '/api/auth');
 await call(bob,null,'/api/time',401);

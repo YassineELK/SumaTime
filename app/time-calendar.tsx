@@ -1,16 +1,20 @@
 'use client';
+import NewGlpiTicket from './new-glpi-ticket';
+import CalendarItem from './calendar-item';
 import TimeInput from '@/components/time-input';
 import LocationField from '@/components/location-field';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Check, LockKeyhole, Plus, RefreshCw, X } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Check, LockKeyhole, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { billedMinutes, brusselsToday, clockTime, duration, locationLabel, parseTime, validDate } from '@/lib/business';
-import { addDays, layoutEntries, overlaps, selectedRange, slotAt, SLOT_COUNT, SLOT_HEIGHT } from '@/lib/calendar';
+import { billedMinutes, brusselsToday, clockTime, duration, parseTime, validDate } from '@/lib/business';
+import { addDays, findCalendarFocus, layoutEntries, overlaps, selectedRange, slotAt, SLOT_COUNT, SLOT_HEIGHT, type CalendarFocusTarget } from '@/lib/calendar';
 import { weekStart } from '@/lib/calendar';
 import type { Entry, State } from '@/lib/types';
 
 type Selection = { date: string; first: number; last: number; mode: 'mouse' | 'touch' | 'keyboard' };
 type Draft = { id: string; version?: number; client_id: string; ticket: string; date: string; start: string; end: string; description: string; on_site: boolean | null; member_id: string; member: string; billed: number };
+type UndoMove = { id: string; original: Pick<Entry, 'date' | 'start' | 'end'>; version: number };
+type FocusTarget = CalendarFocusTarget & { date: string };
 const dayName = (date: string, long = false) => new Date(date + 'T12:00:00Z').toLocaleDateString('fr-BE', { timeZone: 'UTC', weekday: long ? 'long' : 'short', day: 'numeric', month: long ? 'long' : undefined });
 
 export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: () => void }) {
@@ -30,9 +34,13 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const [notice, setNotice] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [operationError,setOperationError]=useState(false);
+  const [undo, setUndo] = useState<UndoMove | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const lastPointer = useRef('mouse');
   const returnFocus = useRef<HTMLElement | null>(null);
+  const focusTarget = useRef<FocusTarget | null>(null);
   const [cursor, setCursor] = useState(32);
   const startOfWeek = weekStart(anchor);
   const days = Array.from({ length: 7 }, (_, i) => addDays(startOfWeek, i));
@@ -40,9 +48,13 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true); setLoadError(''); setEntries([]); setRange(null);
     const q = new URLSearchParams({ from: startOfWeek, to: addDays(startOfWeek, 6), member });
-    void fetch('/api/time?' + q, { signal: controller.signal, cache: 'no-store' }).then(async res => {
+    void Promise.resolve().then(() => {
+      if (controller.signal.aborted) return null;
+      setLoading(true); setLoadError(''); setEntries([]); setRange(null);
+      return fetch('/api/time?' + q, { signal: controller.signal, cache: 'no-store' });
+    }).then(async res => {
+      if (!res || controller.signal.aborted) return;
       const json = await res.json() as State & { error?: string };
       if (!res.ok || !json.me) throw new Error(json.error || 'Votre accès a changé. Actualisez votre espace.');
       if (!controller.signal.aborted) setEntries(json.entries);
@@ -52,20 +64,37 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
   }, [startOfWeek, member, revision, data, setRange]);
   useEffect(() => { if (scroll.current) scroll.current.scrollTop = 8 * 4 * SLOT_HEIGHT; }, []);
   useEffect(() => {
-    if (!notice) return;
+    if (!notice || operationError || undo) return;
     const timer = setTimeout(() => setNotice(''), 6500);
     return () => clearTimeout(timer);
-  }, [notice]);
+  }, [notice,operationError,undo]);
   useEffect(() => {
     const cancel = (event: globalThis.KeyboardEvent) => { if (event.key === 'Escape') setRange(null); };
     window.addEventListener('keydown', cancel);
     return () => window.removeEventListener('keydown', cancel);
   }, [setRange]);
 
+  useEffect(() => {
+    const target = focusTarget.current;
+    if (loading || !target) return;
+    focusTarget.current = null;
+    const entry = entries.find(value => value.id === target.id);
+    requestAnimationFrame(() => {
+      const controls = [...document.querySelectorAll<HTMLElement>('[data-entry-id]')];
+      const control = entry && findCalendarFocus(controls, target);
+      if (control) {
+        control.focus({ preventScroll: true });
+        return;
+      }
+      const column = [...document.querySelectorAll<HTMLElement>('[data-date]')].find(value => value.dataset.date === (entry?.date || target.date));
+      column?.querySelector<HTMLElement>('[data-time-slot="0"]')?.focus({ preventScroll: true });
+    });
+  }, [entries, loading]);
+
   function showDraft(value: Draft) {
     returnFocus.current = document.activeElement as HTMLElement;
     initialDraft.current = JSON.stringify(value);
-    setDraft(value); setSaveError(''); setRange(null);
+    setDraft(value); setSaveError(''); setDeleting(false); setRange(null);
   }
   function openRange(date: string, first: number, last: number) {
     if (loading || loadError || date > today) return;
@@ -155,11 +184,50 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
       const res = await fetch('/api/time', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...draft, action: 'saveEntry' }) });
       const json = await res.json() as { error?: string };
       if (!res.ok) throw new Error(json.error || 'Enregistrement impossible.');
-      setAnchor(draft.date); setMember(draft.member_id); setDraft(null);
+      setAnchor(draft.date); setMember(draft.member_id); setDraft(null); setUndo(null); setOperationError(false);
       setNotice(draft.version ? 'Prestation mise à jour dans le calendrier.' : 'Prestation enregistrée dans le calendrier.');
       setRevision(n => n + 1); onSaved();
     } catch (e) { setSaveError(e instanceof Error ? e.message : 'Enregistrement non confirmé. Vos champs sont conservés ; réessayez.'); }
     finally { savingRef.current = false; setSaving(false); }
+  }
+  async function removeEntry() {
+    if (!draft?.version || draft.billed || savingRef.current) return;
+    savingRef.current=true; setSaving(true); setSaveError('');
+    try {
+      const res=await fetch('/api/time',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'deleteEntry',id:draft.id,version:draft.version})});
+      const result=await res.json() as {error?:string};if(!res.ok)throw new Error(result.error||'Suppression impossible.');
+      setDraft(null);setDeleting(false);setUndo(null);setOperationError(false);setNotice('Prestation supprimée. Les totaux ont été actualisés.');setRevision(n=>n+1);onSaved();
+    }catch(e){setSaveError(e instanceof Error?e.message:'Suppression non confirmée. Actualisez avant de réessayer.');}
+    finally{savingRef.current=false;setSaving(false);}
+  }
+  async function changeEntry(entry: Entry, next: {date:string;start:number;end:number}) {
+    if(savingRef.current||entry.billed)return;
+    if(overlaps(next.start,next.end,entries,entry.member_id,next.date,entry.id)){setOperationError(true);setNotice('Déplacement impossible : ce créneau chevauche une autre prestation.');return;}
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const activeHandle = active?.dataset.calendarHandle;
+    if (active?.dataset.entryId === entry.id && (activeHandle === 'body' || activeHandle === 'start' || activeHandle === 'end' || activeHandle === 'move')) {
+      focusTarget.current = { id: entry.id, handle: activeHandle, date: next.date };
+    }
+    savingRef.current=true;setSaving(true);setOperationError(false);setNotice('Enregistrement des horaires…');
+    try{
+      const res=await fetch('/api/time',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...entry,...next,action:'saveEntry',start:clockTime(next.start),end:next.end===1440?'00:00':clockTime(next.end),on_site:entry.on_site===null?null:!!entry.on_site})});
+      const result=await res.json() as {error?:string};if(!res.ok)throw new Error(result.error||'Modification impossible.');
+      setUndo({ id: entry.id, original: { date: entry.date, start: entry.start, end: entry.end }, version: entry.version + 1 });setNotice(`Horaires enregistrés : ${clockTime(next.start)}–${clockTime(next.end)}.`);setRevision(n=>n+1);onSaved();
+    }catch(e){setOperationError(true);setNotice(e instanceof Error?e.message:'Enregistrement non confirmé. Actualisez avant de réessayer.');setRevision(n=>n+1);}
+    finally{savingRef.current=false;setSaving(false);}
+  }
+  async function undoMove(value: UndoMove) {
+    if (savingRef.current) return;
+    focusTarget.current = { id: value.id, handle: 'move', date: value.original.date };
+    savingRef.current = true; setSaving(true); setOperationError(false); setNotice('Restauration des horaires précédents…');
+    try {
+      const res = await fetch('/api/time', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'restoreEntryRange', id: value.id, version: value.version, ...value.original }) });
+      const result = await res.json() as { error?: string };
+      if (!res.ok) throw new Error(result.error || 'Annulation impossible.');
+      setUndo(null); setNotice('Horaires précédents restaurés.'); setRevision(n => n + 1); onSaved();
+    } catch (e) {
+      setOperationError(true); setNotice(e instanceof Error ? e.message : 'Annulation non confirmée. Actualisez avant de réessayer.'); setRevision(n => n + 1);
+    } finally { savingRef.current = false; setSaving(false); }
   }
   const range = selection ? selectedRange(selection.first, selection.last) : null;
   const readOnly = !!draft?.billed;
@@ -170,9 +238,9 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
   };
 
   return <section className="time-calendar" aria-label="Calendrier des prestations">
-    {notice && <div className="alert success" role="status"><Check size={18} />{notice}</div>}
+    {notice && <div className={'alert '+(operationError?'error':'success')} role={operationError?'alert':'status'}><Check size={18} />{notice}{undo&&<button className="text-button" disabled={saving} onClick={()=>void undoMove(undo)}>Annuler le déplacement</button>}</div>}
     <div className="calendar-toolbar"><div className="calendar-navigation"><button className="secondary" aria-label="Semaine précédente" onClick={() => changeWeek(-1)}><ChevronLeft size={18} /></button><button className="secondary" onClick={() => { setAnchor(today); setRange(null); }}>Aujourd’hui</button><button className="secondary" aria-label="Semaine suivante" disabled={addDays(startOfWeek, 7) > today} onClick={() => changeWeek(1)}><ChevronRight size={18} /></button><h2>{new Date(startOfWeek + 'T12:00:00Z').toLocaleDateString('fr-BE', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}<span> — {new Date(addDays(startOfWeek, 6) + 'T12:00:00Z').toLocaleDateString('fr-BE', { day: 'numeric', month: 'long', timeZone: 'UTC' })}</span></h2></div><div className="calendar-controls"><label><span className="sr-only">Aller à une date</span><input type="date" max={today} value={anchor} onChange={e => { if (validDate(e.target.value) && e.target.value <= today) setAnchor(e.target.value); }} /></label>{me.role === 'admin' && <label><span className="sr-only">Calendrier du partenaire</span><select value={member} onChange={e => setMember(e.target.value)}><option value="">Toute l’équipe</option>{data.members.map(m => <option key={m.id} value={m.id}>{m.id === me.id ? 'Mon calendrier' : m.name}</option>)}</select></label>}<button className="primary" disabled={loading || !!loadError} onClick={() => openRange(anchor, 36, 39)}><Plus size={17} />Prestation</button></div></div>
-    <div className="calendar-instructions"><span><Clock3 size={16} /><span className="mouse-instruction">Cliquez-glissez sur un jour pour sélectionner une plage de 15 minutes ou plus.</span><span className="touch-instruction">Touchez le premier puis le dernier quart d’heure de votre prestation.</span></span><span>Saisie pour <strong>{me.name}</strong> · Bruxelles</span></div>
+    <div className="calendar-instructions"><span><Clock3 size={16} /><span className="mouse-instruction">Sélectionnez une plage, déplacez une prestation ou étirez ses bords. Pas de 15 min ; horaires précis au clavier.</span><span className="touch-instruction">Touchez le premier puis le dernier quart d’heure de votre prestation.</span></span><span>Saisie pour <strong>{me.name}</strong> · Bruxelles</span></div>
     {loadError && <div className="alert error" role="alert"><span>{loadError}</span><button className="secondary" onClick={() => setRevision(n => n + 1)}><RefreshCw size={16} />Réessayer</button></div>}
     {selection && range && <div className="calendar-selection-bar" role="status"><span>{dayName(selection.date)} · <strong>{clockTime(range.start)}–{clockTime(range.end)}</strong> · {duration(range.end - range.start)}</span>{selection.mode !== 'mouse' && <button className="primary" onClick={() => openRange(selection.date, selection.first, selection.last)}>Continuer</button>}<button className="icon-button" aria-label="Annuler la sélection" onClick={() => setRange(null)}><X size={18} /></button></div>}
     <div className="calendar-panel panel" aria-busy={loading}>
@@ -182,7 +250,7 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
         {days.map(date => <div key={date} data-date={date} aria-label={dayName(date, true)} className={'calendar-day-column' + (date === anchor ? ' selected-day' : '') + (date === today ? ' is-today' : '') + (date > today ? ' future-day' : '')} onPointerDown={e => pointerDown(e, date)} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => { if (selectionRef.current?.mode === 'mouse') setRange(null); }} onLostPointerCapture={() => { if (selectionRef.current?.mode === 'mouse') setRange(null); }}>
           {Array.from({ length: SLOT_COUNT }, (_, slot) => <button key={slot} type="button" data-time-slot={slot} aria-label={`${dayName(date, true)}, ${clockTime(slot * 15)} à ${clockTime((slot + 1) * 15)}`} className={'calendar-slot' + (slot % 4 === 0 ? ' hour-start' : '')} style={{ height: SLOT_HEIGHT }} tabIndex={slot === cursor && date <= today ? 0 : -1} disabled={loading || !!loadError || date > today} onFocus={() => setCursor(slot)} onKeyDown={e => key(e, date, slot)} onClick={e => { if (lastPointer.current === 'touch') tap(date, slot); else if (e.detail === 0) openRange(date, slot, slot); }}><span>{clockTime(slot * 15)}</span></button>)}
           {selection?.date === date && range && <div className="calendar-range" style={{ top: range.start / 15 * SLOT_HEIGHT, height: (range.end - range.start) / 15 * SLOT_HEIGHT }}><strong>{clockTime(range.start)}–{clockTime(range.end)}</strong></div>}
-          {layoutEntries(entries.filter(e => e.date === date), 12.5).map(({ entry, lane, lanes }) => <button key={entry.id} className={'calendar-event' + (clientColors.get(entry.client_id) ? ' has-client-color' : '') + (entry.billed ? ' is-billed' : '') + (entry.end - entry.start < 30 ? ' compact-event' : entry.end - entry.start < 45 ? ' short-event' : '')} style={{ ...eventColor(entry.client_id), top: entry.start / 15 * SLOT_HEIGHT, height: Math.max(20, (entry.end - entry.start) / 15 * SLOT_HEIGHT - 2), left: `calc(${lane / lanes * 100}% + 3px)`, width: `calc(${100 / lanes}% - 6px)` }} title={`${entry.client} · ${entry.ticket}\n${entry.member} · ${locationLabel(entry.on_site)}\n${clockTime(entry.start)}–${clockTime(entry.end)} · ${duration(billedMinutes(entry.start, entry.end))} facturables${entry.billed ? '\nFacturé' : ''}`} aria-label={`${entry.billed ? 'Consulter' : 'Modifier'} ${entry.ticket}, ${entry.client}, ${entry.member}, ${clockTime(entry.start)} à ${clockTime(entry.end)}`} onPointerDown={e => e.stopPropagation()} onClick={() => openEntry(entry)}><span>{!!entry.billed && <LockKeyhole size={12} />}{clockTime(entry.start)}–{clockTime(entry.end)}</span><span className="calendar-event-details"><strong>{entry.client}</strong><small>{entry.ticket}{member === '' ? ' · ' + entry.member : ''}</small></span></button>)}
+          {layoutEntries(entries.filter(e => e.date === date), 12.5).map(({ entry, lane, lanes }) => <CalendarItem key={entry.id} entry={entry} lane={lane} lanes={lanes} colorStyle={eventColor(entry.client_id)} colored={!!clientColors.get(entry.client_id)} team={member===''} disabled={loading} today={today} onOpen={()=>openEntry(entry)} onChange={(entry,next)=>void changeEntry(entry,next)} />)}
         </div>)}
         </div>
       </div>
@@ -198,17 +266,18 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
           <fieldset disabled={saving || readOnly}>
             <label>Client <span className="required">*</span><select autoFocus required value={draft.client_id} onChange={e => update('client_id', e.target.value)}><option value="">Choisir un client</option>{data.clients.filter(c => c.active || (draft.version && c.id === draft.client_id)).map(c => <option key={c.id} value={c.id}>{c.name}{c.active ? '' : ' (archivé)'}</option>)}</select></label>
             <label>Numéro de ticket <span className="required">*</span><input required maxLength={120} placeholder="Ex. INC-2026-042" value={draft.ticket} onChange={e => update('ticket', e.target.value)} /></label>
+            {!readOnly&&<NewGlpiTicket clients={data.clients} initialClient={draft.client_id} initialDescription={draft.description} disabled={saving} onCreated={ticket=>setDraft(prev=>prev?{...prev,client_id:ticket.client_id||prev.client_id,ticket:'GLPI-'+ticket.id,description:prev.description||ticket.title}:prev)}/>}
             <div className="calendar-modal-times"><label>Date <span className="required">*</span><input required type="date" max={today} value={draft.date} onChange={e => update('date', e.target.value)} /></label><TimeInput label="Début" value={draft.start} onChange={value => update('start', value)} disabled={saving || readOnly} /><TimeInput label="Fin" value={draft.end} onChange={value => update('end', value)} disabled={saving || readOnly} /></div>
             <LocationField value={draft.on_site} onChange={on_site => setDraft(prev => prev ? ({ ...prev, on_site }) : prev)} disabled={saving || readOnly} />
             <label>Description <span className="optional">facultatif</span><textarea rows={3} maxLength={2000} value={draft.description} onChange={e => update('description', e.target.value)} placeholder="Sur quoi avez-vous travaillé ?" /></label>
           </fieldset>
           <div className="duration-preview"><div><span>Temps réel</span><strong>{validTimes ? duration(end - begin) : '—'}</strong></div><ChevronRight size={18} /><div><span>À facturer</span><strong>{validTimes ? duration(billedMinutes(begin, end)) : '—'}</strong></div></div>
           {conflict && !readOnly && <p className="calendar-conflict" role="alert">Ce créneau chevauche une autre prestation de {draft.member}. Ajustez les horaires.</p>}
-          <div className="calendar-modal-actions"><button type="button" className="secondary" disabled={saving} onClick={closeDraft}>{readOnly ? 'Fermer' : 'Annuler'}</button>{!readOnly && <button className="primary" disabled={saving || !validTimes || conflict || !draft.client_id}><Check size={18} />{saving ? 'Enregistrement…' : 'Enregistrer la prestation'}</button>}</div>
+          {deleting&&<div className="inline-confirm" role="alert"><p>Supprimer la prestation <strong>{draft.ticket}</strong> de {data.clients.find(c=>c.id===draft.client_id)?.name}, le {draft.date}, de {draft.start} à {draft.end} ?</p><div><button type="button" className="secondary" disabled={saving} onClick={()=>setDeleting(false)}>Conserver</button><button type="button" className="primary danger-button" disabled={saving} onClick={()=>void removeEntry()}>Confirmer la suppression</button></div></div>}
+          <div className="calendar-modal-actions">{draft.version&&!readOnly&&!deleting&&<button type="button" className="secondary danger-button" disabled={saving} onClick={()=>setDeleting(true)}><Trash2 size={16}/>Supprimer</button>}<button type="button" className="secondary" disabled={saving} onClick={closeDraft}>{readOnly ? 'Fermer' : 'Annuler'}</button>{!readOnly && <button className="primary" disabled={saving || !validTimes || conflict || !draft.client_id}><Check size={18} />{saving ? 'Enregistrement…' : 'Enregistrer la prestation'}</button>}</div>
           <p className="form-note">Heures de Bruxelles · Fin 00:00 = minuit · Arrondi au quart d’heure supérieur</p>
         </form>}
       </DialogContent>
     </Dialog>
   </section>;
 }
-

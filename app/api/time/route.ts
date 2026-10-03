@@ -145,6 +145,22 @@ export async function POST(request: Request) {
       if (body.id === member.id) throw new HttpError('Vous ne pouvez pas désactiver votre propre accès.');
       await db.prepare("UPDATE members SET active=? WHERE id=? AND role='partner'").bind(Number(body.active), text(body.id, 'Le partenaire')).run();
       if (!body.active) sqlite().prepare('DELETE FROM sessions WHERE member_id=?').run(body.id);
+    } else if (body.action === 'restoreEntryRange') {
+      const id = text(body.id, 'L’identifiant', 60);
+      if (!/^[a-f0-9-]{36}$/.test(id)) throw new HttpError('Identifiant non valide.');
+      if (!Number.isInteger(body.version) || body.version < 1) throw new HttpError('Version non valide.');
+      const date = text(body.date, 'La date', 10);
+      if (!validDate(date) || date > brusselsToday()) throw new HttpError('La date doit être valide et ne peut pas être future.');
+      let start: number, end: number;
+      try { start = parseTime(body.start); end = body.end === '00:00' ? 1440 : parseTime(body.end); } catch (e) { throw new HttpError((e as Error).message); }
+      if (end <= start) throw new HttpError('L’heure de fin doit être après le début.');
+      const existing = await db.prepare('SELECT * FROM entries WHERE id=?').bind(id).first<Entry>();
+      if (!existing || (existing.member_id !== member.id && member.role !== 'admin')) throw new HttpError('Prestation inaccessible.', 403);
+      if (existing.billed) throw new HttpError('Cette prestation est facturée. Un administrateur doit d’abord la rouvrir.', 409);
+      const overlap = 'NOT EXISTS (SELECT 1 FROM entries WHERE member_id=? AND date=? AND start<? AND end>? AND id<>?)';
+      const result = transaction(tx => tx.prepare(`UPDATE entries SET date=?,start=?,end=?,updated_at=?,version=version+1 WHERE id=? AND version=? AND billed=0 AND ${overlap}`).run(date, start, end, now, id, body.version, existing.member_id, date, end, start, id));
+      if (!result.changes) throw new HttpError('Ce créneau chevauche une prestation existante, ou la ligne a été modifiée. Actualisez la liste avant de réessayer.', 409);
+      return response({ ok: true, version: body.version + 1 });
     } else if (body.action === 'saveEntry') {
       const id = text(body.id, 'L’identifiant', 60);
       if (!/^[a-f0-9-]{36}$/.test(id)) throw new HttpError('Identifiant non valide.');

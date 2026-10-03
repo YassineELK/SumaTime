@@ -40,3 +40,17 @@ export function layoutEntries(entries: Entry[], minimumVisibleMinutes = 0) {
   finish();
   return result;
 }
+
+export type CalendarGesture = 'move' | 'start' | 'end';
+export type CalendarFocusTarget = { id: string; handle: 'body' | 'start' | 'end' | 'move' };
+export function findCalendarFocus<T extends { dataset: { entryId?: string; calendarHandle?: string } }>(nodes: readonly T[], target: CalendarFocusTarget) {
+  return nodes.find(node => node.dataset.entryId === target.id && node.dataset.calendarHandle === target.handle) || null;
+}
+/** A drag preserves minute precision while applying quarter-hour deltas. */
+export function adjustedRange(start: number, end: number, delta: number, mode: CalendarGesture) {
+  const shift = Math.round(delta / 15) * 15;
+  if (mode === 'start') return { start: Math.max(0, Math.min(end - 1, start + shift)), end };
+  if (mode === 'end') return { start, end: Math.min(1440, Math.max(start + 1, end + shift)) };
+  const next = Math.max(0, Math.min(1440 - (end - start), start + shift));
+  return { start: next, end: next + end - start };
+}

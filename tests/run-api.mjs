@@ -10,7 +10,7 @@ let logs = '';
 child.stdout.on('data', chunk => { logs += chunk; }); child.stderr.on('data', chunk => { logs += chunk; });
 try {
   let ready = false;
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 400; i++) {
     if (child.exitCode !== null) throw new Error(logs);
     try { const result = await fetch(env.TEST_URL + '/api/auth'); if (result.ok) { ready = true; break; } } catch {}
     await new Promise(resolve => setTimeout(resolve, 300));

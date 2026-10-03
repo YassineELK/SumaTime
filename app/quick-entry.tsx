@@ -1,4 +1,5 @@
 'use client';
+import NewGlpiTicket from './new-glpi-ticket';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Check, Play, Save } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -20,7 +21,7 @@ export default function QuickEntry({ data, seed, mode, onClose, onSaved }: { dat
   const [dirty, setDirty] = useState(restored || !!seed?.ticket);
   const minutes = (v: string) => /^\d\d:\d\d$/.test(v) ? Number(v.slice(0,2)) * 60 + Number(v.slice(3)) : NaN;
   const real = (form.end === '00:00' ? 1440 : minutes(form.end)) - minutes(form.start);
-  useEffect(() => { if (mode !== 'entry' || !dirty) return; try { localStorage.setItem(draftKey(data.me!.id), JSON.stringify(form)); } catch { setStorageError(true); } }, [form, dirty, mode, data.me]);
+  useEffect(() => { if (mode !== 'entry' || !dirty) return; try { localStorage.setItem(draftKey(data.me!.id), JSON.stringify(form)); } catch { queueMicrotask(() => setStorageError(true)); } }, [form, dirty, mode, data.me]);
   const update = (patch: Partial<Draft>) => { setDirty(true); setForm(value => ({ ...value, ...patch })); };
   async function save(event: FormEvent) {
     event.preventDefault(); if (busy) return; setBusy(true); setError('');
@@ -37,6 +38,7 @@ export default function QuickEntry({ data, seed, mode, onClose, onSaved }: { dat
     <form className="quick-form" onSubmit={save}><fieldset disabled={busy}>
       <label>Client <span className="required">*</span><select required autoFocus value={form.client_id} onChange={e => update({ client_id: e.target.value })}><option value="">Choisir un client</option>{data.clients.filter(c => c.active).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
       <label>Ticket <span className="required">*</span><input required maxLength={120} value={form.ticket} placeholder="Ex. GLPI-123 ou INC-042" onChange={e => update({ ticket: e.target.value })} /></label>
+      <div className="span-all"><NewGlpiTicket clients={data.clients} initialClient={form.client_id} initialDescription={form.description} disabled={busy} onCreated={ticket=>update({client_id:ticket.client_id||form.client_id,ticket:'GLPI-'+ticket.id,description:form.description||ticket.title})}/></div>
       {mode === 'entry' && <><label className="span-all">Date de l’intervention <span className="required">*</span><input type="date" required max={brusselsToday()} value={form.date} onChange={e => update({ date: e.target.value })} /></label><TimeInput label="Début" value={form.start} onChange={start => update({ start })} /><TimeInput label="Fin" value={form.end} onChange={end => update({ end })} /></>}
       <div className="span-all"><LocationField value={form.on_site} onChange={on_site => update({ on_site })} /></div>
       <label className="span-all">Travail réalisé <span className="optional">facultatif</span><textarea maxLength={2000} rows={3} value={form.description} placeholder="Le contexte utile pour votre relevé…" onChange={e => update({ description: e.target.value })} /></label>

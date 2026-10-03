@@ -41,7 +41,7 @@ await call(bob,{action:'stop',id:timer.id},'/api/workday',409);
 await call(alice,{action:'save',id:timer.id,version:1,description:''},'/api/workday',400);
 // Deterministic past interval, 2026-09-15 10:00–10:16 Brussels.
 db.prepare('UPDATE work_timers SET started_at=?,stopped_at=? WHERE id=?').run(Date.parse('2026-09-15T08:00:01Z'),Date.parse('2026-09-15T08:15:20Z'),timer.id);
-let work=await call(alice);equal(work.segments,[{date:'2026-09-15',start:600,end:616}]);
+let work=await call(alice);equal(work.segments,[{date:'2026-09-15',start:600,end:630}]);
 await call(alice,{action:'stop',id:timer.id}); // stopping twice preserves the end
 equal((await call(alice)).timer.stopped_at,work.timer.stopped_at);
 await call(alice,{action:'save',id:timer.id,version:9,description:''},'/api/workday',409);
@@ -99,6 +99,34 @@ const countBefore=db.prepare('SELECT COUNT(*) AS n FROM entries').get().n;
 await call(alice,{action:'save',id:atomic.id,version:1,description:'',segments:[{date:'2026-09-13',start:'20:00',end:'20:15'},{date:'2026-09-14',start:'00:00',end:'00:10'}]},'/api/workday',409);
 equal(db.prepare('SELECT COUNT(*) AS n FROM entries').get().n,countBefore);equal((await call(alice)).timer.id,atomic.id);
 await call(alice,{action:'discard',id:atomic.id,version:1});
+// Explicit creation uses personal rights, preserves client/entity and prevents replay.
+await call(alice,{action:'connect',token:'alice-test-token'},'/api/glpi');
+await call(bob,{action:'connect',token:'bob-test-token'},'/api/glpi');
+const creation={action:'createTicket',request_id:randomUUID(),client_id:client.id,title:'Ticket depuis Sumatime',description:'Description <script>safe</script>',type:1,urgency:3,category:1};
+const opts=await call(alice,null,'/api/glpi?createOptions=1&client='+client.id);equal(opts.categories[0].id,1);
+await call(alice,{action:'connect',token:'entity-false-test-token'},'/api/glpi');
+const entityFalseRequestId=randomUUID();
+await call(alice,{...creation,request_id:entityFalseRequestId,title:'ENTITY-CONTEXT-FALSE'},'/api/glpi',502);
+equal(db.prepare('SELECT COUNT(*) AS n FROM glpi_creations WHERE request_id=?').get(entityFalseRequestId).n,0);
+for (const token of ['entity-http-error-test-token', 'entity-malformed-test-token']) {
+  await call(alice,{action:'connect',token},'/api/glpi');
+  await call(alice,null,'/api/glpi?createOptions=1&client='+client.id,502);
+}
+await call(alice,{action:'connect',token:'alice-test-token'},'/api/glpi');
+await call(bob,{...creation,request_id:randomUUID()},'/api/glpi',403);
+await call(alice,{...creation,request_id:randomUUID()},'/api/glpi',403,'https://foreign.invalid');
+await call(alice,{...creation,request_id:randomUUID(),title:''},'/api/glpi',400);
+const made=await call(alice,creation,'/api/glpi');equal(made.ticket.client_id,client.id);equal(made.ticket.entity,4);
+equal((await call(alice,creation,'/api/glpi')).ticket.id,made.ticket.id);
+await call(alice,{...creation,title:'Changed payload'},'/api/glpi',409);
+const rejected={...creation,request_id:randomUUID(),title:'REJECT-CREATE'};await call(alice,rejected,'/api/glpi',422);
+equal(db.prepare('SELECT COUNT(*) AS n FROM glpi_creations WHERE request_id=?').get(rejected.request_id).n,0);
+const uncertain={...creation,request_id:randomUUID(),title:'UNCERTAIN-CREATE'};
+equal((await call(alice,uncertain,'/api/glpi',409)).uncertain,true);
+equal((await call(alice,uncertain,'/api/glpi',409)).uncertain,true);
+const concurrent={...creation,request_id:randomUUID(),title:'CONCURRENT-CREATE'};
+const simultaneous=await Promise.all([1,2].map(()=>fetch(base+'/api/glpi',{method:'POST',headers:{Cookie:alice.cookie,Origin:base,'Content-Type':'application/json'},body:JSON.stringify(concurrent)})));
+equal(simultaneous.map(r=>r.status).sort(),[200,409]);await Promise.all(simultaneous.map(r=>r.arrayBuffer()));
 // A second on-site timer on the same client/day does not create a second trip.
 const daily={...timer,id:randomUUID(),ticket:'DAILY-FEE'};await call(alice,daily);
 db.prepare('UPDATE work_timers SET started_at=?,stopped_at=? WHERE id=?').run(Date.parse('2026-09-15T09:00:00Z'),Date.parse('2026-09-15T09:15:00Z'),daily.id);

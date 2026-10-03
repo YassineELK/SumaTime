@@ -4,19 +4,39 @@ export function brusselsMoment(timestamp: number) {
   return { date: `${parts.year}-${parts.month}-${parts.day}`, minute: Number(parts.hour) * 60 + Number(parts.minute) };
 }
 export type TimerSegment = { date: string; start: number; end: number };
+function civilMinuteIndex(moment: ReturnType<typeof brusselsMoment>) {
+  return Date.parse(moment.date + 'T00:00:00Z') / 60000 + moment.minute;
+}
+function offsetMinute(timestamp: number) {
+  return civilMinuteIndex(brusselsMoment(timestamp)) - Math.floor(timestamp / 60000);
+}
 export function timerSegments(started: number, stopped: number): TimerSegment[] {
   if (!Number.isFinite(started) || !Number.isFinite(stopped) || stopped < started) throw new Error('Les horaires du chronomètre sont invalides.');
   if (stopped - started > 24 * 3600000) throw new Error('Ce chronomètre dépasse 24 heures. Saisissez les horaires réels manuellement avant de le supprimer.');
-  const from = Math.floor(started / 60000) * 60000;
-  const to = Math.max(from + 60000, Math.ceil(stopped / 60000) * 60000);
+  // Validate the measured interval first. Rounded civil bounds can straddle a
+  // nonexistent hour even when the actual intervention did not.
+  const measuredStartOffset = offsetMinute(started);
+  const measuredEndOffset = offsetMinute(Math.max(started, stopped - 1));
+  if (measuredStartOffset !== measuredEndOffset) throw new Error('Ce chronomètre traverse un changement d’heure. Vérifiez et saisissez les horaires manuellement avant de le supprimer.');
+
+  // Round the displayed civil values, not the UTC instants. This keeps the
+  // proposed editable bounds useful around DST and retains the existing
+  // quarter-hour and midnight rules.
+  const quarter = 15;
+  const measuredFrom = civilMinuteIndex(brusselsMoment(started));
+  const stoppedMinuteRemainder = ((stopped % 60000) + 60000) % 60000;
+  const measuredTo = civilMinuteIndex(brusselsMoment(stopped)) + (stoppedMinuteRemainder === 0 ? 0 : 1);
+  const from = Math.floor(measuredFrom / quarter) * quarter;
+  const to = Math.max(from + quarter, Math.ceil(measuredTo / quarter) * quarter);
   const segments: TimerSegment[] = [];
-  for (let instant = from; instant < to; instant += 60000) {
-    const now = brusselsMoment(instant), next = brusselsMoment(instant + 60000);
-    const end = next.date !== now.date ? 1440 : next.minute;
-    if (end - now.minute !== 1 || (next.date !== now.date && next.minute !== 0)) throw new Error('Ce chronomètre traverse un changement d’heure. Vérifiez et saisissez les horaires manuellement avant de le supprimer.');
-    const last = segments.at(-1);
-    if (last?.date === now.date) last.end = end;
-    else segments.push({ date: now.date, start: now.minute, end });
+  let cursor = from;
+  while (cursor < to) {
+    const date = new Date(cursor * 60000).toISOString().slice(0, 10);
+    const dayStart = Date.parse(date + 'T00:00:00Z') / 60000;
+    const nextDay = dayStart + 1440;
+    const end = Math.min(to, nextDay) - dayStart;
+    segments.push({ date, start: cursor - dayStart, end });
+    cursor = dayStart + end;
   }
   return segments;
 }

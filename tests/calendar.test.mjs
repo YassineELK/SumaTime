@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addDays, weekStart, selectedRange, slotAt, layoutEntries, overlaps } from '../lib/calendar.ts';
+import { addDays, weekStart, selectedRange, slotAt, layoutEntries, overlaps, adjustedRange } from '../lib/calendar.ts';
 
 const entry = (id, start, end, member_id = 'me') => ({ id, start, end, member_id, date: '2026-09-16' });
 test('calendar weeks start on Monday across months, years and DST', () => {
@@ -35,4 +35,14 @@ test('concurrent team entries are visible in separate lanes; touching events use
   assert.equal(layoutEntries([]).length, 0);
   assert.deepEqual(layoutEntries([entry('a',0,15),entry('b',15,30)]).map(e => e.lanes), [1,1]);
   assert.deepEqual(layoutEntries([entry('a',0,1),entry('b',1,2)], 12.5).map(e => [e.lane,e.lanes]), [[0,2],[1,2]]);
+});
+
+test('calendar moves retain exact minute duration and stay within the day',()=>{
+ assert.deepEqual(adjustedRange(547,622,15,'move'),{start:562,end:637});
+ assert.deepEqual(adjustedRange(547,622,-900,'move'),{start:0,end:75});
+ assert.deepEqual(adjustedRange(547,622,900,'move'),{start:1365,end:1440});
+ assert.deepEqual(adjustedRange(547,622,15,'start'),{start:562,end:622});
+ assert.deepEqual(adjustedRange(547,622,-15,'end'),{start:547,end:607});
+ assert.deepEqual(adjustedRange(547,622,900,'start'),{start:621,end:622});
+ assert.deepEqual(adjustedRange(547,622,-900,'end'),{start:547,end:548});
 });
