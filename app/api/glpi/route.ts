@@ -1,6 +1,6 @@
 import { getMember, checkOrigin, AuthError, rateLimit } from '@/lib/auth';
 import { sqlite } from '@/db/raw';
-import { acknowledgeGlpiCreation, createGlpiTicket, glpiCreationOptions, glpiWriteEnabled, GlpiCreationUncertain, glpiConfig, glpiUncertainRequests, hasGlpiToken, glpiTickets, saveGlpiToken, testGlpiToken } from '@/lib/glpi';
+import { acknowledgeGlpiCreationResult, createGlpiTicket, glpiCreationOptions, glpiWriteEnabled, GlpiCreationUncertain, glpiConfig, glpiUncertainRequests, hasGlpiToken, glpiTickets, resolveLegacyCreation, saveGlpiToken, testGlpiToken } from '@/lib/glpi';
 export const dynamic = 'force-dynamic';
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
 async function who() { const me = await getMember(); if (!me) throw new AuthError('Reconnectez-vous.', 401); if (me.must_change) throw new AuthError('Changez votre mot de passe provisoire.', 403); return me; }
@@ -12,7 +12,7 @@ const fail = (e: unknown) => json({
 export async function GET(request: Request) {
   try {
     const me = await who(), config = glpiConfig(), url = new URL(request.url);
-    if (url.searchParams.has('uncertain')) return json(glpiUncertainRequests(me.id, config?.api));
+    if (url.searchParams.has('uncertain')) return json(glpiUncertainRequests(me.id, config?.api, url.searchParams.get('recover') === '1'));
     if (url.searchParams.has('createOptions')) { if(!config) throw new AuthError('GLPI doit être configuré.',409); return json(await glpiCreationOptions(me.id,config,url.searchParams.get('client')||'')); }
     if (!url.searchParams.has('tickets')) return json({ configured: !!config, canCreate: glpiWriteEnabled(), connected: !!config && hasGlpiToken(me.id, config), web: config?.web || null });
     if (!config) throw new AuthError('L’administrateur doit configurer l’adresse GLPI sur le serveur.', 409);
@@ -30,7 +30,13 @@ export async function POST(request: Request) {
     if (body.action === 'acknowledgeCreation') {
       if (typeof body.request_id !== 'string' || !/^[a-f0-9-]{36}$/.test(body.request_id)) throw new AuthError('Demande invalide.');
       const ticketId = Number.isSafeInteger(body.ticket_id) ? body.ticket_id as number : undefined;
-      return json({ ok: acknowledgeGlpiCreation(me.id, glpiConfig()?.api, body.request_id, ticketId) });
+      return json(acknowledgeGlpiCreationResult(me.id, glpiConfig()?.api, body.request_id, ticketId));
+    }
+    if (body.action === 'resolveLegacyCreation') {
+      if (typeof body.request_id !== 'string' || !/^[a-f0-9-]{36}$/.test(body.request_id)) throw new AuthError('Demande invalide.');
+      if (body.resolution !== 'abandon' && body.resolution !== 'recover') throw new AuthError('Résolution historique invalide.');
+      const result = resolveLegacyCreation(me.id, undefined, body.request_id, body.resolution, body.payload, body.ticket);
+      return json(result);
     }
     if (body.action === 'createTicket') { const config=glpiConfig(); if(!config)throw new AuthError('GLPI doit être configuré.',409); rateLimit('glpi-create:'+me.id,10,60000); return json(await createGlpiTicket(me.id,config,body)); }
     if (body.action === 'disconnect') sqlite().prepare('DELETE FROM glpi_credentials WHERE member_id=?').run(me.id);

@@ -24,13 +24,14 @@ let creates = 0;
 let acknowledgements = 0;
 let completedOnLoss = false;
 let completedVisible = false;
+let dropNextAckResponse = false;
 let deferPending = false;
 let deferredPendingResolve = null;
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input);
   if (url === '/api/glpi' && init.method === 'POST') {
     const body = JSON.parse(String(init.body));
-    if (body.action === 'acknowledgeCreation') { acknowledgements += 1; return new Response(JSON.stringify({ ok: true }), { status: 200 }); }
+    if (body.action === 'acknowledgeCreation') { acknowledgements += 1; if (dropNextAckResponse) { dropNextAckResponse = false; throw new TypeError('ACK response lost after server commit'); } return new Response(JSON.stringify({ ok: true }), { status: 200 }); }
     assert.equal(body.action, 'createTicket');
     const value = { request_id: body.request_id, client_id: body.client_id, title: body.title, description: body.description, type: body.type, urgency: body.urgency, category: body.category };
     if (!accepted.length) {
@@ -78,7 +79,7 @@ function create(element, container) {
   act(() => { root.render(element); });
   return root;
 }
-function ticket(memberId = 'alice-member') { return React.createElement(NewGlpiTicket, { clients, memberId, onCreated: () => {} }); }
+function ticket(memberId = 'alice-member', onCreated = () => {}) { return React.createElement(NewGlpiTicket, { clients, memberId, onCreated }); }
 
 test('quota failure remount consults the member-scoped Next API and reconciles one mock Ticket POST', { concurrency: false }, async () => {
   const blockedStorage = { getItem: () => null, setItem: () => { throw Object.assign(new Error('quota'), { name: 'QuotaExceededError' }); }, removeItem: () => {} };
@@ -110,6 +111,38 @@ test('quota failure remount consults the member-scoped Next API and reconciles o
   assert.equal(acknowledgements, 0, 'mount, polling, and recovery must not acknowledge before explicit consumption');
   await act(async () => { click(button('Utiliser ce ticket')); await wait(20); });
   assert.equal(acknowledgements, 1, 'only explicit ticket consumption may acknowledge the authoritative result');
+  await act(async () => { root.render(null); await wait(0); });
+});
+
+test('a committed ACK whose response is lost is replayed idempotently and calls onCreated once', { concurrency: false }, async () => {
+  accepted.length = 0;
+  pending = null;
+  creates = 0;
+  completedOnLoss = false;
+  completedVisible = false;
+  acknowledgements = 0;
+  dropNextAckResponse = false;
+  let createdCount = 0;
+  const container = document.getElementById('root-a');
+  const root = create(ticket('alice-member', () => { createdCount += 1; }), container);
+  await settle(20);
+  await act(async () => { click(button('Nouveau ticket GLPI')); await wait(15); });
+  const form = document.querySelector('form.quick-form');
+  assert.ok(form);
+  setField(form.querySelector('select'), client.id);
+  setField(form.querySelector('input[maxlength="250"]'), 'ACK response loss');
+  setField(form.querySelector('textarea'), 'ACK remains authoritative');
+  await act(async () => { form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(15); });
+  await act(async () => { click(button('Récupérer le résultat')); await wait(15); });
+  assert.match(document.body.textContent, /Ticket créé dans GLPI/);
+  dropNextAckResponse = true;
+  await act(async () => { click(button('Utiliser ce ticket')); await wait(15); });
+  assert.equal(acknowledgements, 1);
+  assert.equal(createdCount, 0, 'a lost ACK response must not report completion prematurely');
+  await act(async () => { click(button('Utiliser ce ticket')); await wait(15); });
+  assert.equal(acknowledgements, 2);
+  assert.equal(createdCount, 1, 'idempotent ACK retry reports the authoritative ticket exactly once');
+  assert.equal(creates, 1);
   await act(async () => { root.render(null); await wait(0); });
 });
 
@@ -154,6 +187,11 @@ test('polling never overwrites an explicitly distinct draft', { concurrency: fal
   await act(async () => { click(button('Nouveau ticket GLPI')); await wait(30); });
   assert.match(document.body.textContent, /Résultat incertain/);
   await act(async () => { click(button('Commencer une nouvelle demande distincte')); await wait(10); });
+  const category = [...document.querySelectorAll('form.quick-form select')][2];
+  assert.ok(category, 'distinct request should render a category field');
+  await settle(50);
+  assert.equal(category.disabled, false, 'distinct request category loading must settle');
+  assert.match(category.textContent, /Assistance/);
   setField(document.querySelector('input[maxlength="250"]'), 'NEW DRAFT TITLE');
   setField(document.querySelector('textarea'), 'NEW DRAFT DESCRIPTION');
   await settle(2150);

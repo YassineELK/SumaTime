@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { dataPath, sqlite } from '@/db/raw';
+import { dataPath, sqlite, transaction } from '@/db/raw';
 import { AuthError } from '@/lib/auth';
 
 type Config = { api: string; web: string; appToken: string };
@@ -118,6 +118,8 @@ export type GlpiCreateInput = { request_id: string; client_id: string; title: st
 export type GlpiCreationOperation = { payload: GlpiCreateInput; createdAt: string; ticket?: GlpiTicket };
 export type GlpiUncertainRequest = GlpiCreationOperation;
 export type GlpiCreateResult = { ticket: GlpiTicket; operation: GlpiCreationOperation };
+export type GlpiLegacyRequest = { request_id: string; createdAt: string; apiUrl: string };
+export const GLPI_CREATION_RESULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export class GlpiCreationUncertain extends AuthError {
   constructor(public readonly operation?: GlpiCreationOperation) { super('La création est en cours ou son résultat est incertain. Vérifiez vos tickets dans GLPI avant toute nouvelle demande ; cette demande ne sera pas renvoyée automatiquement.', 409); }
 }
@@ -137,43 +139,124 @@ function storedTicket(value: unknown): GlpiTicket {
 function creationFingerprint(input: GlpiCreateInput) {
   return createHash('sha256').update(JSON.stringify([input.client_id, input.title, input.description, input.type, input.urgency, input.category])).digest('hex');
 }
-type CreationRow = { request_id: string; member_id: string; api_url: string; payload_hash: string; payload_json: string | null; result_json: string | null; acknowledged_at: string | null; created_at: string };
+type CreationRow = { request_id: string; member_id: string; api_url: string; payload_hash: string; payload_json: string | null; result_json: string | null; acknowledged_at: string | null; expires_at: string | null; legacy_state: string | null; created_at: string };
+type AliasRow = { alias_request_id: string; operation_request_id: string; member_id: string; api_url: string; payload_hash: string; result_json: string | null; created_at: string; expires_at: string | null };
+const creationColumns = 'request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,expires_at,legacy_state,created_at';
 function operationFromRow(row: Pick<CreationRow, 'payload_json' | 'result_json' | 'created_at'>): GlpiCreationOperation {
   const parsed: unknown = row.payload_json ? JSON.parse(row.payload_json) : null;
   const ticket = row.result_json ? storedTicket(JSON.parse(row.result_json)) : undefined;
   return { payload: createInput(parsed), createdAt: row.created_at, ...(ticket ? { ticket } : {}) };
 }
-export function glpiUncertainRequests(member: string, apiUrl?: string) {
+function resultExpiry(now = Date.now()) {
+  return new Date(now + GLPI_CREATION_RESULT_TTL_MS).toISOString();
+}
+function cleanupCreationHistory(db: ReturnType<typeof sqlite>) {
+  // Only a confirmed result that the member explicitly ACKed can expire.  In
+  // particular, no result-less uncertainty (including a legacy row) is ever
+  // removed by retention housekeeping.
+  db.prepare(`DELETE FROM glpi_creations
+    WHERE payload_json IS NOT NULL AND acknowledged_at IS NOT NULL AND result_json IS NOT NULL
+      AND expires_at IS NOT NULL AND expires_at<=?`).run(new Date().toISOString());
+}
+function rowForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: string | undefined, requestId: string) {
+  const row = (apiUrl
+    ? db.prepare(`SELECT ${creationColumns} FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?`).get(requestId, member, apiUrl)
+    : db.prepare(`SELECT ${creationColumns} FROM glpi_creations WHERE request_id=? AND member_id=?`).get(requestId, member)) as CreationRow | undefined;
+  return row;
+}
+function aliasForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: string | undefined, requestId: string) {
+  const row = (apiUrl
+    ? db.prepare('SELECT alias_request_id,operation_request_id,member_id,api_url,payload_hash,result_json,created_at,expires_at FROM glpi_creation_aliases WHERE alias_request_id=? AND member_id=? AND api_url=?').get(requestId, member, apiUrl)
+    : db.prepare('SELECT alias_request_id,operation_request_id,member_id,api_url,payload_hash,result_json,created_at,expires_at FROM glpi_creation_aliases WHERE alias_request_id=? AND member_id=?').get(requestId, member)) as AliasRow | undefined;
+  return row;
+}
+export function glpiUncertainRequests(member: string, apiUrl?: string, includeAcknowledged = false) {
  const db=sqlite();
+ cleanupCreationHistory(db);
   const mismatched = apiUrl && db.prepare('SELECT 1 FROM glpi_creations WHERE member_id=? AND api_url<>? AND acknowledged_at IS NULL LIMIT 1').get(member, apiUrl);
   const rows = (apiUrl
-   ? db.prepare('SELECT request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,created_at FROM glpi_creations WHERE member_id=? AND api_url=? AND acknowledged_at IS NULL ORDER BY created_at DESC LIMIT 20').all(member, apiUrl)
-   : db.prepare('SELECT request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,created_at FROM glpi_creations WHERE member_id=? AND acknowledged_at IS NULL ORDER BY created_at DESC LIMIT 20').all(member)) as CreationRow[];
- let blocked = !!mismatched;
+   ? db.prepare(`SELECT ${creationColumns} FROM glpi_creations WHERE member_id=? AND api_url=? AND acknowledged_at IS NULL ORDER BY created_at DESC LIMIT 20`).all(member, apiUrl)
+   : db.prepare(`SELECT ${creationColumns} FROM glpi_creations WHERE member_id=? AND acknowledged_at IS NULL ORDER BY created_at DESC LIMIT 20`).all(member)) as CreationRow[];
+  // Keep legacy blockers visible even when the configured GLPI URL changed;
+  // otherwise the member would see a permanent block with no safe action.
+  const legacyRows = db.prepare(`SELECT request_id,api_url,created_at FROM glpi_creations WHERE member_id=?
+    AND payload_json IS NULL AND result_json IS NULL AND acknowledged_at IS NULL
+    AND COALESCE(legacy_state,'pending')='pending' ORDER BY created_at DESC LIMIT 20`).all(member) as { request_id: string; api_url: string; created_at: string }[];
+ let blocked = !!mismatched || legacyRows.length > 0;
  const requests: GlpiUncertainRequest[] = [];
  for (const row of rows) {
   try {
-   requests.push(operationFromRow(row));
+   if (row.payload_json) requests.push(operationFromRow(row));
+   else blocked = true;
   } catch { blocked = true; }
  }
- return { requests, blocked };
+ const legacy = legacyRows.map(row => ({ request_id: row.request_id, createdAt: row.created_at, apiUrl: row.api_url }));
+ const response: { requests: GlpiUncertainRequest[]; blocked: boolean; legacy?: GlpiLegacyRequest[]; recoverable?: GlpiUncertainRequest[] } = { requests, blocked };
+ if (legacy.length) response.legacy = legacy;
+ if (includeAcknowledged) {
+   const acknowledgedRows = (apiUrl
+     ? db.prepare(`SELECT ${creationColumns} FROM glpi_creations WHERE member_id=? AND api_url=?
+       AND acknowledged_at IS NOT NULL AND result_json IS NOT NULL AND payload_json IS NOT NULL
+       AND expires_at>? ORDER BY acknowledged_at DESC LIMIT 20`).all(member, apiUrl, new Date().toISOString())
+     : db.prepare(`SELECT ${creationColumns} FROM glpi_creations WHERE member_id=?
+       AND acknowledged_at IS NOT NULL AND result_json IS NOT NULL AND payload_json IS NOT NULL
+       AND expires_at>? ORDER BY acknowledged_at DESC LIMIT 20`).all(member, new Date().toISOString())) as CreationRow[];
+   const recoverable: GlpiUncertainRequest[] = [];
+   for (const row of acknowledgedRows) {
+     try { recoverable.push(operationFromRow(row)); } catch { blocked = true; }
+   }
+   response.recoverable = recoverable;
+ }
+ response.blocked = blocked;
+ return response;
+}
+export type GlpiAcknowledgeResult = { ok: boolean; ticket?: GlpiTicket };
+export function acknowledgeGlpiCreationResult(member: string, apiUrl: string | undefined, requestId: string, ticketId?: number): GlpiAcknowledgeResult {
+  if (!Number.isSafeInteger(ticketId)) return { ok: false };
+  return transaction(db => {
+    cleanupCreationHistory(db);
+    const alias = aliasForRequest(db, member, apiUrl, requestId);
+    const operationId = alias?.operation_request_id || requestId;
+    const row = rowForRequest(db, member, apiUrl, operationId);
+    if (!row?.result_json) return { ok: false };
+    let ticket: GlpiTicket;
+    try { ticket = storedTicket(JSON.parse(row.result_json)); } catch { return { ok: false }; }
+    if (ticket.id !== ticketId) return { ok: false };
+    // Idempotence is deliberate: a committed ACK is a successful retry, not
+    // an error merely because the first HTTP response vanished in transit.
+    if (!row.acknowledged_at) {
+      const acknowledgedAt = new Date().toISOString();
+      const expiresAt = resultExpiry();
+      db.prepare('UPDATE glpi_creations SET acknowledged_at=?,expires_at=? WHERE request_id=? AND member_id=? AND api_url=? AND acknowledged_at IS NULL').run(acknowledgedAt, expiresAt, row.request_id, member, row.api_url);
+      db.prepare('UPDATE glpi_creation_aliases SET result_json=?,expires_at=? WHERE operation_request_id=? AND member_id=? AND api_url=?').run(row.result_json, expiresAt, row.request_id, member, row.api_url);
+    }
+    return { ok: true, ticket };
+  });
 }
 export function acknowledgeGlpiCreation(member: string, apiUrl: string | undefined, requestId: string, ticketId?: number) {
- const db=sqlite();
- const row = (apiUrl
-  ? db.prepare('SELECT result_json FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?').get(requestId,member,apiUrl)
-  : db.prepare('SELECT result_json FROM glpi_creations WHERE request_id=? AND member_id=?').get(requestId,member)) as { result_json: string | null } | undefined;
- // Acknowledge is intentionally not an acknowledgement of receipt of the
- // request.  It is only valid after the server has a validated ticket result
- // and the caller proves which ticket the user explicitly consumed.
- if (!row?.result_json || !Number.isSafeInteger(ticketId)) return false;
- let ticket: GlpiTicket;
- try { ticket = storedTicket(JSON.parse(row.result_json)); } catch { return false; }
- if (ticket.id !== ticketId) return false;
- const result = apiUrl
-  ? db.prepare('UPDATE glpi_creations SET acknowledged_at=? WHERE request_id=? AND member_id=? AND api_url=? AND acknowledged_at IS NULL').run(new Date().toISOString(),requestId,member,apiUrl)
-  : db.prepare('UPDATE glpi_creations SET acknowledged_at=? WHERE request_id=? AND member_id=? AND acknowledged_at IS NULL').run(new Date().toISOString(),requestId,member);
- return result.changes > 0;
+  return acknowledgeGlpiCreationResult(member, apiUrl, requestId, ticketId).ok;
+}
+export type GlpiLegacyResolution = { ok: true; resolution: 'abandoned' | 'recovered'; operation?: GlpiCreationOperation };
+export function resolveLegacyCreation(member: string, apiUrl: string | undefined, requestId: string, resolution: 'abandon' | 'recover', rawPayload?: unknown, rawTicket?: unknown): GlpiLegacyResolution {
+  return transaction(db => {
+    const row = rowForRequest(db, member, apiUrl, requestId);
+    if (!row || row.payload_json !== null || row.result_json !== null || row.acknowledged_at !== null || row.legacy_state !== 'pending') throw new AuthError('Cette opération historique n’est plus en attente de résolution.', 409);
+    if (resolution === 'abandon') {
+      const at = new Date().toISOString();
+      db.prepare("UPDATE glpi_creations SET legacy_state='abandoned',acknowledged_at=?,expires_at=NULL WHERE request_id=? AND member_id=?").run(at, row.request_id, member);
+      return { ok: true, resolution: 'abandoned' };
+    }
+    if (!rawPayload || !rawTicket) throw new AuthError('Fournissez le payload et le ticket vérifiés dans GLPI pour récupérer cette opération.', 400);
+    const input = createInput(rawPayload);
+    if (input.request_id !== row.request_id || creationFingerprint(input) !== row.payload_hash) throw new AuthError('La preuve fournie ne correspond pas à l’opération historique.', 409);
+    const ticket = storedTicket(rawTicket);
+    const resultJson = JSON.stringify(ticket);
+    db.prepare("UPDATE glpi_creations SET payload_json=?,result_json=?,legacy_state='recovered',acknowledged_at=NULL,expires_at=NULL WHERE request_id=? AND member_id=?").run(JSON.stringify(input), resultJson, row.request_id, member);
+    db.prepare(`INSERT OR REPLACE INTO glpi_creation_aliases
+      (alias_request_id,operation_request_id,member_id,api_url,payload_hash,result_json,created_at,expires_at)
+      VALUES (?,?,?,?,?,?,?,NULL)`).run(row.request_id, row.request_id, member, row.api_url, row.payload_hash, resultJson, row.created_at);
+    return { ok: true, resolution: 'recovered', operation: { payload: input, createdAt: row.created_at, ticket } };
+  });
 }
 function mappedClient(id: string) {
  const client=sqlite().prepare('SELECT id,name,glpi_entity_id FROM clients WHERE id=? AND active=1').get(id) as {id:string;name:string;glpi_entity_id:number|null}|undefined;
@@ -203,27 +286,74 @@ export async function glpiCreationOptions(member:string,config:Config,clientId:s
   };
  });
 }
+function linkCreationAlias(db: ReturnType<typeof sqlite>, input: GlpiCreateInput, operation: CreationRow) {
+  const existing = db.prepare('SELECT operation_request_id,member_id,api_url,payload_hash FROM glpi_creation_aliases WHERE alias_request_id=?').get(input.request_id) as { operation_request_id: string; member_id: string; api_url: string; payload_hash: string } | undefined;
+  if (existing && (existing.member_id !== operation.member_id || existing.api_url !== operation.api_url || existing.payload_hash !== creationFingerprint(input))) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.', 409);
+  db.prepare(`INSERT OR IGNORE INTO glpi_creation_aliases
+    (alias_request_id,operation_request_id,member_id,api_url,payload_hash,result_json,created_at,expires_at)
+    VALUES (?,?,?,?,?,?,?,?)`).run(input.request_id, operation.request_id, operation.member_id, operation.api_url, operation.payload_hash, operation.result_json, operation.created_at, operation.expires_at);
+  // An alias may have been inserted while the provider response was still
+  // unknown. Keep its snapshot current whenever a later retry sees the row.
+  db.prepare(`UPDATE glpi_creation_aliases SET operation_request_id=?,result_json=?,expires_at=?
+    WHERE alias_request_id=? AND member_id=? AND api_url=?`).run(operation.request_id, operation.result_json, operation.expires_at, input.request_id, operation.member_id, operation.api_url);
+}
+function authoritativeCreation(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, fingerprint: string) {
+  return db.prepare(`SELECT ${creationColumns} FROM glpi_creations
+    WHERE member_id=? AND api_url=? AND payload_hash=? AND payload_json IS NOT NULL
+    ORDER BY CASE WHEN result_json IS NOT NULL THEN 0 WHEN acknowledged_at IS NULL THEN 1 ELSE 2 END,created_at,request_id LIMIT 1`).get(member, apiUrl, fingerprint) as CreationRow | undefined;
+}
 export async function createGlpiTicket(member:string,config:Config,rawInput:unknown):Promise<GlpiCreateResult> {
  if(!glpiWriteEnabled())throw new AuthError('La création GLPI est désactivée dans cet environnement.',403);
  const input = createInput(rawInput);
- const db=sqlite();
  const fingerprint=creationFingerprint(input);
  const payloadJson=JSON.stringify(input);
- const reserved=db.prepare('INSERT OR IGNORE INTO glpi_creations (request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,created_at) VALUES (?,?,?,?,?,NULL,NULL,?)').run(input.request_id,member,config.api,fingerprint,payloadJson,new Date().toISOString());
- if(!reserved.changes){
-  const byRequest = db.prepare('SELECT request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,created_at FROM glpi_creations WHERE request_id=?').get(input.request_id) as CreationRow | undefined;
-  if (byRequest && (byRequest.member_id !== member || byRequest.api_url !== config.api || byRequest.payload_hash !== fingerprint)) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.',409);
-  const authoritative = byRequest || db.prepare(`SELECT request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,created_at
-    FROM glpi_creations WHERE member_id=? AND api_url=? AND payload_hash=? AND payload_json IS NOT NULL
-    ORDER BY CASE WHEN acknowledged_at IS NULL THEN 0 ELSE 1 END,created_at,request_id LIMIT 1`).get(member,config.api,fingerprint) as CreationRow | undefined;
-  if (!authoritative?.payload_json) throw new AuthError('Cette demande ne peut pas être réconciliée. Ouvrez un nouveau formulaire.',409);
-  const operation = operationFromRow(authoritative);
+ const reservation = transaction(db => {
+   cleanupCreationHistory(db);
+   const legacy = db.prepare(`SELECT request_id FROM glpi_creations WHERE member_id=?
+     AND payload_json IS NULL AND result_json IS NULL AND acknowledged_at IS NULL
+     AND COALESCE(legacy_state,'pending')='pending' LIMIT 1`).get(member);
+   if (legacy) throw new AuthError('Une opération GLPI historique reste indécise. Vérifiez GLPI puis abandonnez-la explicitement ou récupérez-la avec une preuve avant toute nouvelle création.', 409);
+   const alias = aliasForRequest(db, member, config.api, input.request_id);
+   if (alias && alias.payload_hash !== fingerprint) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.', 409);
+   const globalByRequest = db.prepare(`SELECT member_id,api_url,payload_hash FROM glpi_creations WHERE request_id=?`).get(input.request_id) as { member_id: string; api_url: string; payload_hash: string } | undefined;
+   if (globalByRequest && (globalByRequest.member_id !== member || globalByRequest.api_url !== config.api || globalByRequest.payload_hash !== fingerprint)) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.',409);
+   const byRequest = rowForRequest(db, member, config.api, input.request_id);
+   if (byRequest && byRequest.payload_hash !== fingerprint) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.', 409);
+   const existing = alias ? rowForRequest(db, member, config.api, alias.operation_request_id) : authoritativeCreation(db, member, config.api, fingerprint);
+   if (existing) {
+     if (!existing.payload_json) throw new AuthError('Cette demande ne peut pas être réconciliée. Résolvez l’opération historique explicitement.', 409);
+     linkCreationAlias(db, input, existing);
+     return { row: existing, reserved: false };
+   }
+   if (byRequest) {
+     if (!byRequest.payload_json) throw new AuthError('Cette demande ne peut pas être réconciliée. Résolvez l’opération historique explicitement.', 409);
+     linkCreationAlias(db, input, byRequest);
+     return { row: byRequest, reserved: false };
+   }
+   const createdAt = new Date().toISOString();
+   const reserved = db.prepare(`INSERT OR IGNORE INTO glpi_creations
+     (request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,expires_at,legacy_state,created_at)
+     VALUES (?,?,?,?,?,NULL,NULL,NULL,'active',?)`).run(input.request_id, member, config.api, fingerprint, payloadJson, createdAt);
+   if (reserved.changes) {
+     const row = db.prepare(`SELECT ${creationColumns} FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?`).get(input.request_id, member, config.api) as CreationRow | undefined;
+     if (!row) throw new AuthError('La réservation GLPI n’a pas pu être conservée. Réessayez après vérification.', 503);
+     linkCreationAlias(db, input, row);
+     return { row, reserved: true };
+   }
+   const winner = authoritativeCreation(db, member, config.api, fingerprint);
+   if (!winner?.payload_json) throw new AuthError('Cette demande ne peut pas être réconciliée. Ouvrez un nouveau formulaire après vérification.', 409);
+   linkCreationAlias(db, input, winner);
+   return { row: winner, reserved: false };
+ });
+ if(!reservation.reserved){
+  const operation = operationFromRow(reservation.row);
   if(operation.ticket)return { ticket: operation.ticket, operation };
   throw new GlpiCreationUncertain(operation);
  }
+ const db=sqlite();
  let client;
  try { client = mappedClient(input.client_id); }
- catch (error) { db.prepare('DELETE FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?').run(input.request_id,member,config.api); throw error; }
+ catch (error) { transaction(database => { database.prepare('DELETE FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?').run(input.request_id,member,config.api); }); throw error; }
  let sent=false;
  try{
   const ticket = await session(config,tokenFor(member,config),async(get,post)=>{
@@ -236,10 +366,16 @@ export async function createGlpiTicket(member:string,config:Config,rawInput:unkn
    const ticket:GlpiTicket={id,title:input.title.trim(),status:1,entity:client.glpi_entity_id,url:config.web+'/front/ticket.form.php?id='+id,client_id:client.id,client:client.name};
    return ticket;
   });
-  db.prepare('UPDATE glpi_creations SET result_json=? WHERE request_id=? AND member_id=? AND api_url=? AND acknowledged_at IS NULL').run(JSON.stringify(ticket),input.request_id,member,config.api);
-  return { ticket, operation: { payload: input, createdAt: String((db.prepare('SELECT created_at FROM glpi_creations WHERE request_id=?').get(input.request_id) as { created_at: string }).created_at), ticket } };
+  const operation = transaction(database => {
+    const resultJson = JSON.stringify(ticket);
+    database.prepare('UPDATE glpi_creations SET result_json=? WHERE request_id=? AND member_id=? AND api_url=? AND acknowledged_at IS NULL').run(resultJson,input.request_id,member,config.api);
+    database.prepare('UPDATE glpi_creation_aliases SET result_json=? WHERE operation_request_id=? AND member_id=? AND api_url=?').run(resultJson,input.request_id,member,config.api);
+    const row = database.prepare('SELECT created_at FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?').get(input.request_id,member,config.api) as { created_at: string };
+    return { payload: input, createdAt: String(row.created_at), ticket };
+  });
+  return { ticket, operation };
  }catch(e){
-  if(!sent||e instanceof GlpiRejected){db.prepare('DELETE FROM glpi_creations WHERE request_id=? AND member_id=?').run(input.request_id,member);throw e;}
+  if(!sent||e instanceof GlpiRejected){transaction(database => { database.prepare('DELETE FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?').run(input.request_id,member,config.api); });throw e;}
   // A timeout/error after POST may still have created a ticket. Never retry blindly.
   const row = db.prepare('SELECT payload_json,result_json,created_at FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?').get(input.request_id,member,config.api) as Pick<CreationRow, 'payload_json'|'result_json'|'created_at'> | undefined;
   let operation: GlpiCreationOperation | undefined;

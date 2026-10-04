@@ -22,11 +22,13 @@ const cookies = new Map();
 let currentBase = '';
 let activeCookie = '';
 let dropNextCreateResponse = false;
+let dropNextAckResponse = false;
 let holdNextPending = false;
 let releaseHeldPending;
 let appChild;
 let glpi;
 let checks = 0;
+let createdCallbacks = 0;
 
 const equal = (actual, expected, message) => { assert.deepEqual(actual, expected, message); checks++; };
 const ok = (value, message) => { assert.ok(value, message); checks++; };
@@ -159,6 +161,11 @@ globalThis.fetch = async (input, init = {}) => {
     await response.arrayBuffer();
     throw new TypeError('simulated browser response loss after provider acceptance');
   }
+  if (target.pathname === '/api/glpi' && body?.action === 'acknowledgeCreation' && dropNextAckResponse) {
+    dropNextAckResponse = false;
+    await response.arrayBuffer();
+    throw new TypeError('simulated browser ACK response loss after server commit');
+  }
   if (target.pathname === '/api/glpi' && target.search === '?uncertain=1' && holdNextPending) {
     holdNextPending = false;
     return new Promise(resolvePending => { releaseHeldPending = () => resolvePending(response); });
@@ -189,7 +196,7 @@ async function waitFor(predicate, timeout = 6000) {
 }
 async function renderTicket(root, memberId, clients, initialClient = '') {
   await act(async () => {
-    root.render(React.createElement(NewGlpiTicket, { clients, memberId, initialClient, onCreated: () => {} }));
+    root.render(React.createElement(NewGlpiTicket, { clients, memberId, initialClient, onCreated: () => { createdCallbacks += 1; } }));
     await wait(30);
   });
 }
@@ -287,7 +294,12 @@ async function main() {
   await waitFor(() => /Ticket créé dans GLPI|Résultat récupéré/.test(document.body.textContent));
   ok(/Ticket créé dans GLPI|Résultat récupéré/.test(document.body.textContent), `restart remount recovers the same server result: ${document.body.textContent}`);
   equal(ticketCalls().length, 1, 'crash/restart recovery does not POST a second Ticket');
+  const callbacksBeforeAckLoss = createdCallbacks;
+  dropNextAckResponse = true;
   await consumeTicket();
+  equal(createdCallbacks, callbacksBeforeAckLoss, 'a committed ACK with a lost response does not report completion early');
+  await consumeTicket();
+  equal(createdCallbacks, callbacksBeforeAckLoss + 1, 'the same ACK is safely replayable and onCreated fires once');
   const afterQuota = await api('alice', null, '/api/glpi?uncertain=1');
   equal(afterQuota.requests, [], 'explicit consumption removes the recovered result');
   await unmountTicket(mounted);
@@ -374,6 +386,9 @@ async function main() {
   const authoritative = simultaneous.requests.find(request => request.payload.title === 'SIMULTANEOUS FINGERPRINT');
   ok(authoritative?.ticket, 'second tab receives the authoritative operation/result');
   await api('alice', { action: 'acknowledgeCreation', request_id: authoritative.payload.request_id, ticket_id: authoritative.ticket.id }, '/api/glpi');
+  const aliasReplay = await api('alice', processPayloads[1], '/api/glpi');
+  equal(aliasReplay.ticket.id, authoritative.ticket.id, 'a previously submitted UUID replays the consumed authoritative result');
+  equal(ticketCalls().length, 5, 'alias replay after consumption emits no second provider Ticket POST');
   await unmountTicket(tabA); await unmountTicket(tabB);
   const mainTicketCount = ticketCalls().length;
   equal(mainTicketCount, 5, 'main loopback mock saw exactly five accepted provider Ticket POSTs');
@@ -393,7 +408,9 @@ async function main() {
   legacy.exec(`INSERT INTO members(id,email,name,role,active,created_at) VALUES ('legacy-member','legacy@example.test','Legacy Admin','admin',1,'2026-01-01T00:00:00.000Z');
     INSERT INTO clients(id,name,active) VALUES ('legacy-client','Legacy Client',1);
     CREATE TABLE glpi_creations (request_id TEXT PRIMARY KEY, member_id TEXT NOT NULL, api_url TEXT NOT NULL, payload_hash TEXT NOT NULL, result_json TEXT, created_at TEXT NOT NULL);
-    INSERT INTO glpi_creations VALUES ('11111111-1111-1111-1111-111111111111','legacy-member','http://127.0.0.1:${legacyPort}/apirest.php','legacy-hash','{"id":301,"title":"Legacy result","status":1,"entity":4,"url":"http://127.0.0.1:${legacyPort}/front/ticket.form.php?id=301","client_id":null,"client":null}','2026-01-01T00:00:00.000Z');`);
+    INSERT INTO glpi_creations VALUES
+      ('11111111-1111-1111-1111-111111111111','legacy-member','http://127.0.0.1:${legacyPort}/apirest.php','legacy-hash','{"id":301,"title":"Legacy result","status":1,"entity":4,"url":"http://127.0.0.1:${legacyPort}/front/ticket.form.php?id=301","client_id":null,"client":null}','2026-01-01T00:00:00.000Z'),
+      ('22222222-2222-2222-2222-222222222222','legacy-member','http://127.0.0.1:${legacyPort}/apirest.php','legacy-uncertain',NULL,'2026-01-01T00:00:00.000Z');`);
   legacy.close();
   glpi = await mockGlpi(legacyPort);
   const legacyStarted = await startServer({ database: legacyDb, appPort: legacyAppPort, mockPort: legacyPort, token: 'legacy-setup-token' });
@@ -404,9 +421,13 @@ async function main() {
   const legacyClient = legacyState.clients.find(item => item.id === 'legacy-client');
   await api('legacy', { action: 'clientGlpi', id: legacyClient.id, entity: 4 }, '/api/time');
   await api('legacy', { action: 'connect', token: 'admin-test-token' }, '/api/glpi');
-  const normalized = await api('legacy', null, '/api/glpi?uncertain=1');
+  let normalized = await api('legacy', null, '/api/glpi?uncertain=1');
   equal(normalized.requests, [], 'legacy result-only row is not a false recovery blocker');
-  equal(normalized.blocked, false, 'legacy migration reports no corrupt blocking state');
+  equal(normalized.blocked, true, 'legacy result-less row remains an explicit migration blocker');
+  ok(normalized.legacy?.some(request => request.request_id === '22222222-2222-2222-2222-222222222222'), 'legacy blocker exposes a member-scoped manual resolution handle');
+  await api('legacy', { action: 'resolveLegacyCreation', request_id: '22222222-2222-2222-2222-222222222222', resolution: 'abandon' }, '/api/glpi');
+  normalized = await api('legacy', null, '/api/glpi?uncertain=1');
+  equal(normalized.blocked, false, 'only an explicit legacy abandonment clears the blocker');
   legacyState = await api('legacy', null, '/api/time');
   legacyState = { ...legacyState, clients: legacyState.clients.filter(item => item.id === legacyClient.id) };
   setStorage(null);
