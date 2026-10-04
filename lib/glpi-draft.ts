@@ -59,14 +59,13 @@ function browserStorage(): StorageLike | null {
 // The server's acknowledged_at is committed before its HTTP response reaches
 // the browser. Keep the separate client-confirmed fact durable so a cold page
 // can distinguish a consumed result from an ACK response lost in transit.
-// sessionStorage is only a fallback for environments that explicitly disable
-// localStorage (it still preserves the invariant within the current tab).
-function browserAcknowledgementStorages(): StorageLike[] {
-  if (typeof window === 'undefined') return [];
-  const stores: StorageLike[] = [];
-  try { if (window.localStorage) stores.push(window.localStorage); } catch {}
-  try { if (window.sessionStorage && !stores.includes(window.sessionStorage)) stores.push(window.sessionStorage); } catch {}
-  return stores;
+// sessionStorage is deliberately not a fallback: a tab-scoped marker can
+// never certify an inter-session consumption. When localStorage is unavailable
+// or corrupt, the pending UUID and the server result remain recoverable until a
+// durable marker can be written.
+function browserAcknowledgementStorage(): StorageLike | null {
+  if (typeof window === 'undefined') return null;
+  try { return window.localStorage || null; } catch { return null; }
 }
 
 function memberStorageKey(memberId = '') {
@@ -337,19 +336,16 @@ export function removePendingGlpiRequest(requestId: string, storage: StorageLike
  */
 export function markGlpiCreationAcknowledged(memberId: string, requestId: string, ticketId: number, scope = '', storage?: StorageLike | null): GlpiDraftStorageResult {
   if (!UUID.test(requestId) || !Number.isSafeInteger(ticketId) || ticketId <= 0 || typeof scope !== 'string' || scope.length > 512) return { ok: false, reason: 'corrupt' };
-  const targets = storage === undefined ? browserAcknowledgementStorages() : [storage];
-  let last: GlpiDraftStorageResult = { ok: false, reason: 'unavailable' };
-  for (const target of targets) {
-    const current = readAcknowledgements(target, memberId);
-    if (current.status !== 'ok') { last = { ok: false, reason: current.status }; continue; }
-    const entries = current.store.entries
-      .filter(entry => entry.request_id !== requestId && entry.confirmedAt > Date.now() - GLPI_ACKNOWLEDGED_TTL_MS);
-    entries.unshift({ request_id: requestId, ticket_id: ticketId, scope, confirmedAt: Date.now() });
-    const result = writeAcknowledgements(target, { version: 1, entries: entries.slice(0, GLPI_ACKNOWLEDGED_MAX_ENTRIES) }, memberId);
-    if (result.ok) return result;
-    last = result;
-  }
-  return last;
+  // The optional storage is an explicit durable-store injection for isolated
+  // tests/server-less callers. The browser default is *only* localStorage;
+  // never substitute sessionStorage or a module cache for this authority.
+  const target = storage === undefined ? browserAcknowledgementStorage() : storage;
+  const current = readAcknowledgements(target, memberId);
+  if (current.status !== 'ok') return { ok: false, reason: current.status };
+  const entries = current.store.entries
+    .filter(entry => entry.request_id !== requestId && entry.confirmedAt > Date.now() - GLPI_ACKNOWLEDGED_TTL_MS);
+  entries.unshift({ request_id: requestId, ticket_id: ticketId, scope, confirmedAt: Date.now() });
+  return writeAcknowledgements(target, { version: 1, entries: entries.slice(0, GLPI_ACKNOWLEDGED_MAX_ENTRIES) }, memberId);
 }
 
 /**
@@ -360,10 +356,8 @@ export function markGlpiCreationAcknowledged(memberId: string, requestId: string
  */
 export function isGlpiCreationAcknowledged(memberId: string, requestId: string, scope?: string, storage?: StorageLike | null): boolean {
   if (!UUID.test(requestId)) return false;
-  const targets = storage === undefined ? browserAcknowledgementStorages() : [storage];
-  return targets.some(target => {
-    const current = readAcknowledgements(target, memberId);
-    if (current.status !== 'ok') return false;
-    return current.store.entries.some(entry => entry.request_id === requestId && (scope === undefined || entry.scope === scope));
-  });
+  const target = storage === undefined ? browserAcknowledgementStorage() : storage;
+  const current = readAcknowledgements(target, memberId);
+  if (current.status !== 'ok') return false;
+  return current.store.entries.some(entry => entry.request_id === requestId && (scope === undefined || entry.scope === scope));
 }

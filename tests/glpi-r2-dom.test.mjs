@@ -15,6 +15,7 @@ globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} 
 if (!globalThis.crypto?.randomUUID) Object.defineProperty(globalThis, 'crypto', { configurable: true, writable: true, value: dom.window.crypto });
 const { createRoot } = await import('react-dom/client');
 const { default: NewGlpiTicket } = await import('../app/new-glpi-ticket.tsx');
+const durableLocalStorage = dom.window.localStorage;
 
 const client = { id: 'client-r2', name: 'Client R2', active: 1, color: null, glpi_entity_id: 4, hourly_rate_cents: null, onsite_hourly_rate_cents: null };
 const clients = [client];
@@ -112,6 +113,11 @@ test('quota failure remount consults the member-scoped Next API and reconciles o
   assert.equal(acknowledgements, 0, 'mount, polling, and recovery must not acknowledge before explicit consumption');
   await act(async () => { click(button('Utiliser ce ticket')); await wait(20); });
   assert.equal(acknowledgements, 1, 'only explicit ticket consumption may acknowledge the authoritative result');
+  // Round14 deliberately rejects sessionStorage as a durable ACK fallback.
+  // Restore the real localStorage before the following scenarios instead of
+  // allowing this quota fixture to leak across tests.
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, writable: true, value: durableLocalStorage });
+  Object.defineProperty(dom.window, 'localStorage', { configurable: true, writable: true, value: durableLocalStorage });
   await act(async () => { root.render(null); await wait(0); });
 });
 

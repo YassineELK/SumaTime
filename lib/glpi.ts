@@ -332,10 +332,12 @@ function draftIdentityForRequest(db: ReturnType<typeof sqlite>, member: string, 
   // timestamps are equal.
   const bound = boundIntentForRows(rows);
   if (bound) return bound;
-  // With no reservation left, retain a single tombstone as the fail-closed
-  // identity. If history is ambiguous, fail closed rather than sorting a
-  // random UUID and treating it as chronology.
-  return highestGeneration(rows, 'L’historique GLPI de ce brouillon est ambigu. Aucun nouveau ticket ne sera envoyé.');
+  // With no reservation left, every remaining row is an audit tombstone. The
+  // rows are equivalent for authorization: any one of them must fail closed,
+  // while their count must never poison the projection of another UUID. Do
+  // not use the random capability value as chronology (or surface an
+  // artificial conflict merely because migration assigned generation zero).
+  return rows[0];
 }
 
 function draftIntentForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, requestId: string) {
@@ -399,6 +401,12 @@ function distinctDraftsForMember(db: ReturnType<typeof sqlite>, member: string, 
   }
   const drafts = new Map<string, GlpiDistinctDraft>();
   for (const group of byDraft.values()) {
+    // A group containing only abandoned/consumed intent rows is an audit
+    // tombstone, not a visible draft. Skip it before the strict identity
+    // projection so two generation-zero migration tombstones cannot raise a
+    // member-wide OPERATION_CONFLICT or disable another UUID's recovery.
+    const hasProjectableAuthority = group.some(row => (!row.abandoned_at && !row.used_at) || !!row.operation_request_id);
+    if (!hasProjectableAuthority) continue;
     const intent = draftIdentityForRequest(db, member, apiUrl, group[0].draft_request_id!);
     if (!intent) continue;
     if (!intent.draft_request_id || intent.abandoned_at) continue;
@@ -689,6 +697,12 @@ export function beginGlpiDistinctCreation(member: string, config: Config, scopeR
 
       const existing = rowForRequest(db, member, config.api, draftRequestId);
       const alias = db.prepare('SELECT alias_request_id FROM glpi_creation_aliases WHERE alias_request_id=? AND member_id=? AND api_url=?').get(draftRequestId, member, config.api) as { alias_request_id: string } | undefined;
+      // Several historical abandoned intents for the same UUID are still a
+      // permanent fail-closed identity. They are not permission to renew or
+      // replay, even when no creation row/alias was ever written.
+      if (identity?.abandoned_at && !bound?.operation_request_id) {
+        throw new AuthError('L’intention de nouvelle demande a été abandonnée explicitement. Renouvelez-la avec une nouvelle identité.', 409, { code: 'INTENT_ABANDONED', terminal: true, retryable: false, preserveOperation: false });
+      }
       // A request UUID with no distinct binding is still a permanent identity
       // tombstone. Never reinterpret it as a fresh draft.
       if ((existing || alias) && !bound?.operation_request_id) {

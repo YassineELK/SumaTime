@@ -128,8 +128,40 @@ async function api(user, payload, path = '/api/auth', expected = 200) {
 
 function ticketCalls() { return glpi.calls.filter(call => call.method === 'POST' && call.path === 'Ticket'); }
 
-function storageQuota() { return { getItem: () => null, setItem: () => { throw Object.assign(new Error('quota'), { name: 'QuotaExceededError' }); }, removeItem: () => {} }; }
-function storageCorrupt() { return { getItem: () => '{"version":2,"requests":[{"payload":"corrupt"}]}', setItem: () => {}, removeItem: () => {} }; }
+function storageQuota() {
+  return {
+    // Preserve unrelated durable ACK markers while making only the ACK write
+    // fail. Returning null for every key would resurrect older consumed
+    // results and make this fixture test storage isolation rather than the
+    // quota path itself.
+    getItem: key => durableLocalStorage.getItem(key),
+    setItem: (key, value) => {
+      if (key.includes('sumatoni-glpi-acknowledged')) throw Object.assign(new Error('quota'), { name: 'QuotaExceededError' });
+      return durableLocalStorage.setItem(key, value);
+    },
+    removeItem: key => durableLocalStorage.removeItem(key),
+  };
+}
+function storageCorrupt() {
+  return {
+    // Keep member-scoped ACK state readable across scenarios; corrupt only
+    // the uncertain-operation store under test.
+    getItem: key => key.includes('sumatoni-glpi-acknowledged') ? durableLocalStorage.getItem(key) : '{"version":2,"requests":[{"payload":"corrupt"}]}',
+    setItem: (key, value) => key.includes('sumatoni-glpi-acknowledged') ? durableLocalStorage.setItem(key, value) : undefined,
+    removeItem: key => durableLocalStorage.removeItem(key),
+  };
+}
+function storageUnavailable() {
+  return {
+    // Reads remain available so a newly opened form receives a real UUID;
+    // every attempted local write is unavailable. This models a store that
+    // becomes read-only between cold recovery and ACK, without hiding older
+    // durable markers from the fixture.
+    getItem: key => key.includes('sumatoni-glpi-acknowledged') ? durableLocalStorage.getItem(key) : null,
+    setItem: () => { throw new Error('storage unavailable'); },
+    removeItem: key => durableLocalStorage.removeItem(key),
+  };
+}
 function setStorage(value) {
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, writable: true, value });
   Object.defineProperty(dom.window, 'localStorage', { configurable: true, writable: true, value });
@@ -152,6 +184,7 @@ globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} 
 Object.defineProperty(globalThis, 'BroadcastChannel', { configurable: true, writable: true, value: undefined });
 Object.defineProperty(dom.window, 'BroadcastChannel', { configurable: true, writable: true, value: undefined });
 if (!globalThis.crypto?.randomUUID) Object.defineProperty(globalThis, 'crypto', { configurable: true, writable: true, value: dom.window.crypto });
+const durableLocalStorage = dom.window.localStorage;
 
 const { createRoot } = await import('react-dom/client');
 const { default: NewGlpiTicket } = await import('../app/new-glpi-ticket.tsx');
@@ -234,8 +267,9 @@ async function openFresh(container) {
   await act(async () => { newButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); await wait(250); });
   await waitFor(() => !!document.querySelector('form.quick-form') || /Ticket créé dans GLPI|Résultat incertain|Connexion GLPI/.test(document.body.textContent));
 }
-async function submitTicket(container, client, title, description) {
+async function submitTicket(container, client, title, description, storageAfterOpen) {
   await openFresh(container);
+  if (storageAfterOpen !== undefined) setStorage(storageAfterOpen);
   const form = [...document.querySelectorAll('form.quick-form')].at(-1);
   assert.ok(form, `form exists before submit: ${document.body.textContent}`);
   setField(form, 'select', client.id);
@@ -245,10 +279,19 @@ async function submitTicket(container, client, title, description) {
   resetCreateRateLimit(rateLimitMemberId);
   await act(async () => { form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(650); });
 }
-async function consumeTicket() {
+async function consumeTicket({ recoverStorage = false } = {}) {
   const consume = [...document.querySelectorAll('button')].filter(value => value.textContent?.includes('Utiliser ce ticket')).at(-1);
   assert.ok(consume, `explicit consumption button exists: ${document.body.textContent}`);
   await act(async () => { consume.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); await wait(450); });
+  // Round14 does not accept a tab-scoped or unavailable store as final ACK
+  // authority. Tests that intentionally disable localStorage must restore a
+  // durable store and perform the explicit UI action again.
+  if (recoverStorage && /état durable n’a pas pu être conservé/.test(document.body.textContent)) {
+    setStorage(durableLocalStorage);
+    const retry = [...document.querySelectorAll('button')].filter(value => value.textContent?.includes('Utiliser ce ticket')).at(-1);
+    assert.ok(retry, `durable retry button exists: ${document.body.textContent}`);
+    await act(async () => { retry.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); await wait(450); });
+  }
 }
 
 async function setupUsersAndClient() {
@@ -308,7 +351,7 @@ async function main() {
   resetCreateRateLimit(rateLimitMemberId);
   await act(async () => { distinctForm.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(700); });
   equal(ticketCalls().length, distinctBefore + 2, 'the server-authorized identical payload creates exactly one second mock Ticket');
-  await consumeTicket();
+  await consumeTicket({ recoverStorage: true });
   const ordinaryStillPending = await api('alice', null, '/api/glpi?uncertain=1');
   equal(ordinaryStillPending.requests?.length, 1, 'the first ordinary operation remains the only server-recoverable result');
   await openFresh(mounted.container);
@@ -317,7 +360,7 @@ async function main() {
   // open a second fresh draft. The distinct operation just ACKed must never
   // be presented.
   await waitFor(() => /Ticket créé dans GLPI|Résultat récupéré/.test(document.body.textContent));
-  await consumeTicket();
+  await consumeTicket({ recoverStorage: true });
   await openFresh(mounted.container);
   await waitFor(() => !!document.querySelector('form.quick-form'));
   const cleanAfterAck = document.querySelector('form.quick-form');
@@ -336,7 +379,10 @@ async function main() {
   // transition survives a close/reopen, authorizes one single-use intent, and
   // an accepted response lost in the browser is reconciled without a second
   // provider Ticket POST.
-  setStorage(null);
+  // The preceding unavailable-storage scenario has explicitly restored and
+  // written durable ACK markers. Keep that store visible so old consumed
+  // results are not reintroduced while this independent scenario starts.
+  setStorage(durableLocalStorage);
   activeCookie = cookies.get('alice');
   uiCreateBodies.length = 0;
   const ackConflictBefore = ticketCalls().length;
@@ -345,7 +391,7 @@ async function main() {
   mounted = await mountTicket(alice.id, users.clients);
   await submitTicket(mounted.container, client, ackConflictTitle, ackConflictDescription);
   equal(ticketCalls().length, ackConflictBefore + 1, 'the ACK conflict fixture creates its first provider Ticket exactly once');
-  await consumeTicket();
+  await consumeTicket({ recoverStorage: true });
   await openFresh(mounted.container);
   let conflictForm = document.querySelector('form.quick-form');
   assert.ok(conflictForm);
@@ -383,13 +429,13 @@ async function main() {
   const retryResult = await api('alice', retryBody, '/api/glpi');
   ok(retryResult.ticket, 'retrying the same authorized UUID replays the authoritative result');
   equal(ticketCalls().length, ackConflictBefore + 2, 'idempotent distinct retry emits no second provider Ticket POST');
-  await consumeTicket();
+  await consumeTicket({ recoverStorage: true });
   await unmountTicket(mounted);
 
   // Round 7 P2-2: a certain provider rejection tombstones its UUID. The UI
   // immediately rotates to a fresh UUID, keeps the correction usable across
   // close/reopen, and the corrected payload is the only one that can create.
-  setStorage(null);
+  setStorage(durableLocalStorage);
   activeCookie = cookies.get('alice');
   uiCreateBodies.length = 0;
   const rejectionBefore = ticketCalls().length;
@@ -427,6 +473,13 @@ async function main() {
   await unmountTicket(mounted);
   mounted = await mountTicket(alice.id, users.clients);
   await openFresh(mounted.container);
+  // With a durable ACK marker visible, the still-unconsumed baseline result
+  // may be presented before the rejected distinct draft. Consume that exact
+  // result and reopen; the terminal rejected projection must remain next.
+  if (/Ticket créé dans GLPI/.test(document.body.textContent)) {
+    await consumeTicket();
+    await openFresh(mounted.container);
+  }
   await waitFor(() => /Création refusée|GLPI a refusé|Plusieurs brouillons distincts/.test(document.body.textContent));
   if (/Plusieurs brouillons distincts/.test(document.body.textContent)) {
     const rejectedChoice = button(document, 'REJECT-CREATE');
@@ -448,12 +501,14 @@ async function main() {
   const correctedBody = { ...uiCreateBodies.at(-1) };
   ok(correctedBody.request_id !== rejectedBody.request_id, 'correction automatically starts a fresh operation UUID');
   equal(ticketCalls().length, rejectionBefore + 3, 'the corrected payload emits one accepted provider Ticket POST');
-  await consumeTicket();
+  await consumeTicket({ recoverStorage: true });
   // The baseline remains recoverable while the rejected distinct UUID is
   // being corrected. Consume it explicitly before the next crash scenarios.
   await openFresh(mounted.container);
-  await waitFor(() => /Ticket créé dans GLPI|Résultat récupéré/.test(document.body.textContent));
-  await consumeTicket();
+  if (/Ticket créé dans GLPI|Résultat récupéré/.test(document.body.textContent)) {
+    await waitFor(() => /Ticket créé dans GLPI|Résultat récupéré/.test(document.body.textContent));
+    await consumeTicket();
+  }
   await unmountTicket(mounted);
 
   const providerBaseline = ticketCalls().length;
@@ -488,6 +543,7 @@ async function main() {
   dropNextAckResponse = true;
   await consumeTicket();
   equal(createdCallbacks, callbacksBeforeAckLoss, 'a committed ACK with a lost response does not report completion early');
+  setStorage(durableLocalStorage);
   await consumeTicket();
   equal(createdCallbacks, callbacksBeforeAckLoss + 1, 'the same ACK is safely replayable and onCreated fires once');
   const afterQuota = await api('alice', null, '/api/glpi?uncertain=1');
@@ -496,19 +552,19 @@ async function main() {
 
   // P2-1 storage variants: corruption and disabled storage both use the same
   // server operation and never auto-ACK at mount or recovery.
-  for (const [label, storage] of [['CORRUPT STORAGE', storageCorrupt()], ['DISABLED STORAGE', null]]) {
-    setStorage(storage);
+  for (const [label, storage, openStorage] of [['CORRUPT STORAGE', storageCorrupt(), undefined], ['DISABLED STORAGE', storageUnavailable(), durableLocalStorage]]) {
+    setStorage(openStorage || storage);
     activeCookie = cookies.get('alice');
     dropNextCreateResponse = true;
     mounted = await mountTicket(alice.id, users.clients);
-    await submitTicket(mounted.container, client, label, `${label} uses server authority`);
+    await submitTicket(mounted.container, client, label, `${label} uses server authority`, openStorage ? storage : undefined);
     equal(ticketCalls().length, providerBaseline + (label === 'CORRUPT STORAGE' ? 2 : 3), `${label} emits exactly one provider Ticket POST`);
     await unmountTicket(mounted);
     mounted = await mountTicket(alice.id, users.clients);
     await openFresh(mounted.container);
     await waitFor(() => /Ticket créé dans GLPI|Résultat récupéré/.test(document.body.textContent));
     ok(/Ticket créé dans GLPI|Résultat récupéré/.test(document.body.textContent), `${label} remount recovers the result`);
-    await consumeTicket();
+    await consumeTicket({ recoverStorage: true });
     equal((await api('alice', null, '/api/glpi?uncertain=1')).requests, [], `${label} explicit consumption clears the server row`);
     await unmountTicket(mounted);
   }
@@ -516,7 +572,7 @@ async function main() {
   // P2-2 stale tab and Alice → Bob → Alice: hold a real Alice response from
   // Next, switch the same React root to Bob, then release it. Private fields
   // must never render in Bob; Alice can later recover her own result.
-  setStorage(null);
+  setStorage(durableLocalStorage);
   activeCookie = cookies.get('alice');
   dropNextCreateResponse = true;
   mounted = await mountTicket(alice.id, users.clients);
@@ -539,14 +595,15 @@ async function main() {
   await openFresh(mounted.container);
   await waitFor(() => /ALICE PRIVATE TITLE/.test(document.body.textContent));
   ok(/ALICE PRIVATE TITLE/.test(document.body.textContent), 'Alice recovers the private result after Bob switch');
-  await consumeTicket();
+  await consumeTicket({ recoverStorage: true });
   equal(ticketCalls().length, providerBaseline + 4, 'Alice → Bob → Alice recovery emits no duplicate Ticket POST');
   await unmountTicket(mounted);
 
   // P2-3 independent simultaneous tabs/process-like roots: both UUIDs have
-  // the same canonical payload, while local storage and BroadcastChannel are
-  // disabled. SQLite fingerprint reservation must select one operation.
-  setStorage(null);
+  // the same canonical payload, while BroadcastChannel is disabled. Keep the
+  // durable ACK store visible so older consumed results cannot be presented;
+  // SQLite fingerprint reservation still selects one operation.
+  setStorage(durableLocalStorage);
   activeCookie = cookies.get('alice');
   const tabA = await mountTicket(alice.id, users.clients, 'root-a');
   const tabB = await mountTicket(alice.id, users.clients, 'root-b');
@@ -663,7 +720,7 @@ async function main() {
   equal(normalized.blocked, false, 'only an explicit legacy abandonment clears the blocker');
   legacyState = await api('legacy', null, '/api/time');
   legacyState = { ...legacyState, clients: legacyState.clients.filter(item => item.id === legacyClient.id) };
-  setStorage(null);
+  setStorage(durableLocalStorage);
   activeCookie = cookies.get('legacy');
   mounted = await mountTicket('legacy-member', legacyState.clients, 'root-a', legacyClient.id);
   await openFresh(mounted.container);
