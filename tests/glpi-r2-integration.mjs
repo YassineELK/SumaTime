@@ -529,7 +529,11 @@ async function main() {
   ok(processResults[winnerIndex].body.ticket?.id === authoritative.ticket.id || processResults[winnerIndex].body.operation?.ticket?.id === authoritative.ticket.id, 'the dynamically identified winner reports the authoritative ticket');
   ok(processResults[loserIndex].status === 200 || processResults[loserIndex].status === 409, 'the dynamically identified loser is either an idempotent replay or a fail-closed uncertainty');
   if (processResults[loserIndex].status === 200) equal(processResults[loserIndex].body.ticket.id, authoritative.ticket.id, 'a loser that completed after the winner still returns the same ticket');
-  else equal(processResults[loserIndex].body.operation?.payload.request_id, authoritative.payload.request_id, 'a fail-closed loser points at the authoritative operation');
+  else if (processResults[loserIndex].body.operation) {
+    equal(processResults[loserIndex].body.operation.payload.request_id, authoritative.payload.request_id, 'a fail-closed loser operation points at the authoritative operation');
+  } else {
+    ok(processResults[loserIndex].body.distinct_required === true || /identique|distincte|terminée/i.test(processResults[loserIndex].body.error || ''), 'a terminal distinct-required loser may fail closed without exposing an operation');
+  }
   await api('alice', { action: 'acknowledgeCreation', request_id: authoritative.payload.request_id, ticket_id: authoritative.ticket.id }, '/api/glpi');
   const replayResponse = await rawFetch(currentBase + '/api/glpi', {
     method: 'POST',
@@ -539,6 +543,7 @@ async function main() {
   const replayBody = await replayResponse.json();
   ok(replayResponse.status === 200 || replayResponse.status === 409, 'a raced secondary UUID either replays the result or fails closed');
   if (replayResponse.status === 200) equal(replayBody.ticket.id, authoritative.ticket.id, 'a previously submitted UUID replays the consumed authoritative result');
+  else if (replayBody.operation) equal(replayBody.operation.payload.request_id, authoritative.payload.request_id, 'a durable alias replay failure still identifies the authoritative operation');
   else ok(/identique|distincte|terminée/i.test(replayBody.error || ''), 'a UUID without a durable alias cannot create after the terminal result');
   equal(ticketCalls().length, providerBaseline + 5, 'alias replay after consumption emits no second provider Ticket POST');
   const persistedDb = new DatabaseSync(databasePath);
@@ -563,6 +568,7 @@ async function main() {
   const staleSecondary = await staleSecondaryResponse.json();
   ok(staleSecondaryResponse.status === 200 || staleSecondaryResponse.status === 409, 'an expired secondary UUID replays a durable alias or fails closed');
   if (staleSecondaryResponse.status === 200) equal(staleSecondary.ticket.id, authoritative.ticket.id, 'the expired secondary alias replays its terminal result');
+  else if (staleSecondary.operation) equal(staleSecondary.operation.payload.request_id, authoritative.payload.request_id, 'an expired alias failure still identifies the authoritative operation');
   else ok(/identique|distincte|terminée/i.test(staleSecondary.error || ''), 'the expired unknown secondary UUID remains terminally blocked');
   equal(ticketCalls().length, providerBaseline + 5, 'expired UUID/alias tombstones cannot produce a new mock Ticket POST');
   await unmountTicket(tabA); await unmountTicket(tabB);

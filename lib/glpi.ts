@@ -56,7 +56,8 @@ function tokenFor(member: string, config: Config) {
     return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
   } catch { throw new AuthError('Votre connexion GLPI doit être renouvelée. Saisissez à nouveau votre jeton.', 409); }
 }
-class GlpiRejected extends AuthError {}
+export class GlpiCreationTerminal extends AuthError {}
+class GlpiRejected extends GlpiCreationTerminal {}
 async function request(config: Config, path: string, headers: Record<string, string>, signal: AbortSignal, method: 'GET' | 'POST' = 'GET', payload?: unknown): Promise<unknown> {
   try {
     const response = await fetch(config.api + '/' + path, { method, ...(payload === undefined ? {} : { body: JSON.stringify(payload) }), headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...(config.appToken ? { 'App-Token': config.appToken } : {}), ...headers }, signal, redirect: 'error', cache: 'no-store' });
@@ -125,7 +126,7 @@ export const GLPI_DISTINCT_INTENT_TTL_MS = 10 * 60 * 1000;
 export class GlpiCreationUncertain extends AuthError {
   constructor(public readonly operation?: GlpiCreationOperation) { super('La création est en cours ou son résultat est incertain. Vérifiez vos tickets dans GLPI avant toute nouvelle demande ; cette demande ne sera pas renvoyée automatiquement.', 409); }
 }
-export class GlpiDistinctRequired extends AuthError {
+export class GlpiDistinctRequired extends GlpiCreationTerminal {
   constructor() { super('Une demande identique est déjà terminée. Utilisez explicitement « Commencer une nouvelle demande distincte » pour autoriser un nouvel incident.', 409); }
 }
 export function glpiWriteEnabled() { return process.env.GLPI_WRITE_ENABLED === 'true'; }
@@ -175,8 +176,8 @@ function aliasForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: 
 }
 
 function operationError(row: CreationRow): never {
-  if (row.terminal_error) throw new AuthError(row.terminal_error, 409);
-  throw new AuthError('Cette opération GLPI est déjà terminée sans résultat récupérable. Ouvrez une nouvelle demande explicitement.', 409);
+  if (row.terminal_error) throw new GlpiCreationTerminal(row.terminal_error, 409);
+  throw new GlpiCreationTerminal('Cette opération GLPI est déjà terminée sans résultat récupérable. Ouvrez une nouvelle demande explicitement.', 409);
 }
 
 function verifyIntent(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, intentId: string, requestId: string, fingerprint: string) {

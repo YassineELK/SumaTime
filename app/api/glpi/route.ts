@@ -1,12 +1,14 @@
 import { getMember, checkOrigin, AuthError, rateLimit } from '@/lib/auth';
 import { sqlite } from '@/db/raw';
-import { acknowledgeGlpiCreationResult, beginGlpiDistinctCreation, createGlpiTicket, glpiCreationOptions, glpiWriteEnabled, GlpiCreationUncertain, GlpiDistinctRequired, glpiConfig, glpiUncertainRequests, hasGlpiToken, glpiTickets, resolveLegacyCreation, saveGlpiToken, testGlpiToken } from '@/lib/glpi';
+import { acknowledgeGlpiCreationResult, beginGlpiDistinctCreation, createGlpiTicket, glpiCreationOptions, glpiWriteEnabled, GlpiCreationTerminal, GlpiCreationUncertain, GlpiDistinctRequired, glpiConfig, glpiUncertainRequests, hasGlpiToken, glpiTickets, resolveLegacyCreation, saveGlpiToken, testGlpiToken } from '@/lib/glpi';
 export const dynamic = 'force-dynamic';
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
 async function who() { const me = await getMember(); if (!me) throw new AuthError('Reconnectez-vous.', 401); if (me.must_change) throw new AuthError('Changez votre mot de passe provisoire.', 403); return me; }
 const fail = (e: unknown) => json({
   error: e instanceof AuthError ? e.message : 'Connexion GLPI indisponible.',
   uncertain: e instanceof GlpiCreationUncertain,
+  terminal: e instanceof GlpiCreationTerminal,
+  retryable: e instanceof GlpiCreationUncertain || (e instanceof AuthError && ([401, 403, 408, 425, 429, 500, 502, 503, 504].includes(e.status) || (e.status === 409 && /acc[eè]s|connexion|connectez|jeton|session/i.test(e.message)))),
   ...(e instanceof GlpiDistinctRequired ? { distinct_required: true } : {}),
   ...(e instanceof GlpiCreationUncertain && e.operation ? { operation: e.operation } : {}),
 }, e instanceof AuthError ? e.status : 503);
