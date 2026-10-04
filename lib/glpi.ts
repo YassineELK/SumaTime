@@ -301,15 +301,41 @@ function draftIntentRows(db: ReturnType<typeof sqlite>, member: string, apiUrl: 
   return db.prepare(`SELECT ${intentColumns}
     FROM glpi_creation_intents
     WHERE member_id=? AND api_url=? AND draft_request_id=?
-    ORDER BY generation DESC,created_at DESC,intent_id DESC`).all(member, apiUrl, requestId) as DistinctIntentRow[];
+    ORDER BY generation DESC,created_at DESC`).all(member, apiUrl, requestId) as DistinctIntentRow[];
+}
+
+function highestGeneration(rows: DistinctIntentRow[], message: string): DistinctIntentRow | undefined {
+  if (!rows.length) return undefined;
+  const generation = Math.max(...rows.map(row => Number.isSafeInteger(row.generation) ? row.generation : 0));
+  const candidates = rows.filter(row => (Number.isSafeInteger(row.generation) ? row.generation : 0) === generation);
+  if (candidates.length !== 1) {
+    throw new AuthError(message, 409, { code: 'OPERATION_CONFLICT', retryable: false, preserveOperation: true });
+  }
+  return candidates[0];
+}
+
+function boundIntentForRows(rows: DistinctIntentRow[]) {
+  return highestGeneration(rows.filter(row => !!row.operation_request_id), 'Plusieurs réservations GLPI correspondent à ce brouillon. Aucun ticket ne sera sélectionné arbitrairement.');
 }
 
 function draftIdentityForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, requestId: string) {
-  // Identity and active-generation selection are deliberately separate. A
-  // tombstone must remain visible to the replay guard even after a newer
-  // generation is issued; filtering it out here would let a stale UUID fall
-  // through to fingerprint aliasing.
-  return draftIntentRows(db, member, apiUrl, requestId)[0];
+  const rows = draftIntentRows(db, member, apiUrl, requestId);
+  // An active generation is the authority for a still-unreserved draft. This
+  // is intentionally selected by generation/state, never by the random
+  // capability string. It also lets a generation-zero migration prefer the
+  // valid active row over an older abandoned tombstone with the same time.
+  const active = highestGeneration(rows.filter(row => !row.abandoned_at && !row.used_at), 'Plusieurs intentions actives correspondent à ce brouillon. Aucun ticket ne sera sélectionné arbitrairement.');
+  if (active) return active;
+  // Once a capability has reserved a creation, its operation_request_id is
+  // the exact durable bridge needed for replay without the capability. It
+  // outranks abandoned tombstones even when all legacy generations and
+  // timestamps are equal.
+  const bound = boundIntentForRows(rows);
+  if (bound) return bound;
+  // With no reservation left, retain a single tombstone as the fail-closed
+  // identity. If history is ambiguous, fail closed rather than sorting a
+  // random UUID and treating it as chronology.
+  return highestGeneration(rows, 'L’historique GLPI de ce brouillon est ambigu. Aucun nouveau ticket ne sera envoyé.');
 }
 
 function draftIntentForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, requestId: string) {
@@ -317,7 +343,7 @@ function draftIntentForRequest(db: ReturnType<typeof sqlite>, member: string, ap
   // reservation. The all-generations identity is checked separately by
   // requireBoundIntentIfMissing so abandoned/consumed tombstones cannot be
   // hidden by this presentation filter.
-  return draftIntentRows(db, member, apiUrl, requestId).find(row => !row.abandoned_at && !row.used_at);
+  return highestGeneration(draftIntentRows(db, member, apiUrl, requestId).filter(row => !row.abandoned_at && !row.used_at), 'Plusieurs intentions actives correspondent à ce brouillon. Renouvelez explicitement une seule intention.');
 }
 
 function requireBoundIntentIfMissing(
@@ -360,13 +386,21 @@ function distinctDraftsForMember(db: ReturnType<typeof sqlite>, member: string, 
   const rows = db.prepare(`SELECT ${intentColumns}
     FROM glpi_creation_intents
     WHERE member_id=? AND api_url=? AND draft_request_id IS NOT NULL AND draft_payload_json IS NOT NULL
-    ORDER BY draft_request_id,generation DESC,created_at DESC,intent_id DESC`).all(member, apiUrl) as DistinctIntentRow[];
-  // Only the newest generation is a visible draft. Older generations are
-  // audit tombstones and must not resurrect a consumed or expired result.
-  const latestByDraft = new Map<string, DistinctIntentRow>();
-  for (const intent of rows) if (intent.draft_request_id && !latestByDraft.has(intent.draft_request_id)) latestByDraft.set(intent.draft_request_id, intent);
+    ORDER BY draft_request_id,generation DESC,created_at DESC`).all(member, apiUrl) as DistinctIntentRow[];
+  // Only the authoritative state for each draft is a visible projection.
+  // Grouping first avoids allowing a capability's random lexical value to
+  // decide which generation-zero migration row wins a timestamp tie.
+  const byDraft = new Map<string, DistinctIntentRow[]>();
+  for (const intent of rows) {
+    if (!intent.draft_request_id) continue;
+    const group = byDraft.get(intent.draft_request_id) || [];
+    group.push(intent);
+    byDraft.set(intent.draft_request_id, group);
+  }
   const drafts = new Map<string, GlpiDistinctDraft>();
-  for (const intent of latestByDraft.values()) {
+  for (const group of byDraft.values()) {
+    const intent = draftIdentityForRequest(db, member, apiUrl, group[0].draft_request_id!);
+    if (!intent) continue;
     if (!intent.draft_request_id || intent.abandoned_at) continue;
     let payload: GlpiCreateInput;
     try { payload = createInput(JSON.parse(intent.draft_payload_json || 'null')); }
@@ -441,7 +475,7 @@ export function glpiUncertainRequests(member: string, apiUrl?: string, includeAc
   } catch { blocked = true; }
  }
  const legacy = legacyRows.map(row => ({ request_id: row.request_id, createdAt: row.created_at, apiUrl: row.api_url }));
-  const response: { requests: GlpiUncertainRequest[]; blocked: boolean; legacy?: GlpiLegacyRequest[]; recoverable?: GlpiUncertainRequest[]; distinctDrafts?: GlpiDistinctDraft[] } = { requests, blocked };
+ const response: { requests: GlpiUncertainRequest[]; blocked: boolean; legacy?: GlpiLegacyRequest[]; recoverable?: GlpiUncertainRequest[]; distinctDrafts?: GlpiDistinctDraft[]; ack_scope?: string } = { requests, blocked };
   if (legacy.length) response.legacy = legacy;
  if (includeAcknowledged) {
    const acknowledgedRows = (apiUrl
@@ -456,13 +490,14 @@ export function glpiUncertainRequests(member: string, apiUrl?: string, includeAc
      try { recoverable.push(operationFromRow(row)); } catch { blocked = true; }
    }
    response.recoverable = recoverable;
+   if (apiUrl) response.ack_scope = apiUrl;
  }
  const distinctDrafts = distinctDraftsForMember(db, member, apiUrl, includeAcknowledged);
  if (distinctDrafts.length) response.distinctDrafts = distinctDrafts;
  response.blocked = blocked;
  return response;
 }
-export type GlpiAcknowledgeResult = { ok: boolean; ticket?: GlpiTicket };
+export type GlpiAcknowledgeResult = { ok: boolean; ticket?: GlpiTicket; ack_scope?: string };
 export function acknowledgeGlpiCreationResult(member: string, apiUrl: string | undefined, requestId: string, ticketId?: number): GlpiAcknowledgeResult {
   if (!Number.isSafeInteger(ticketId)) return { ok: false };
   return transaction(db => {
@@ -483,7 +518,7 @@ export function acknowledgeGlpiCreationResult(member: string, apiUrl: string | u
       db.prepare("UPDATE glpi_creations SET acknowledged_at=?,expires_at=?,state='acknowledged' WHERE request_id=? AND member_id=? AND api_url=? AND acknowledged_at IS NULL").run(acknowledgedAt, expiresAt, row.request_id, member, row.api_url);
       db.prepare('UPDATE glpi_creation_aliases SET result_json=?,expires_at=? WHERE operation_request_id=? AND member_id=? AND api_url=?').run(row.result_json, expiresAt, row.request_id, member, row.api_url);
     }
-    return { ok: true, ticket };
+    return { ok: true, ticket, ack_scope: row.api_url };
   });
 }
 export function acknowledgeGlpiCreation(member: string, apiUrl: string | undefined, requestId: string, ticketId?: number) {
@@ -586,14 +621,14 @@ export function beginGlpiDistinctCreation(member: string, config: Config, scopeR
         FROM glpi_creation_intents
         WHERE member_id=? AND api_url=? AND draft_request_id=?
         ORDER BY generation DESC,created_at DESC`).all(member, config.api, draftRequestId) as DistinctIntentRow[];
-      const latest = rows[0];
-      previousGeneration = latest ? Number.isSafeInteger(latest.generation) ? latest.generation : 0 : -1;
-      if (!preservedPayload) preservedPayload = latest?.draft_payload_json || null;
+      previousGeneration = rows.length ? Math.max(...rows.map(row => Number.isSafeInteger(row.generation) ? row.generation : 0)) : -1;
+      const identity = draftIdentityForRequest(db, member, config.api, draftRequestId);
+      if (!preservedPayload) preservedPayload = identity?.draft_payload_json || null;
 
       // A reservation is the durable answer to a lost browser response. Do
       // not mint a second capability for the same draft UUID; return the
       // operation and let the UI show/recover its authoritative result.
-      const bound = rows.find(row => !!row.operation_request_id);
+      const bound = boundIntentForRows(rows);
       if (bound?.operation_request_id) {
         const operationRow = rowForRequest(db, member, config.api, bound.operation_request_id);
         if (operationRow?.payload_json) {

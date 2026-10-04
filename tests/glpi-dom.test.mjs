@@ -86,6 +86,6 @@ test('uncertain GLPI UI remount reconciles the same request without a second und
   await act(async () => { click(button('Récupérer le résultat')); await wait(10); });
   assert.match(document.body.textContent, /Ticket créé dans GLPI/);
   assert.equal(glpiTicketCreates, 1, 'the remount must not cause a second underlying GLPI Ticket creation');
-  assert.equal(localStorage.getItem(GLPI_UNCERTAIN_STORAGE_KEY), null);
+  assert.ok(localStorage.getItem(GLPI_UNCERTAIN_STORAGE_KEY), 'the exact UUID remains durable until explicit ACK consumption');
   await act(async () => { root.unmount(); await wait(0); });
 });

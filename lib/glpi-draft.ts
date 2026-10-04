@@ -21,6 +21,8 @@ export type PendingGlpiRequest = {
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 type StoredRequests = { version: 2; requests: PendingGlpiRequest[] };
+type GlpiAcknowledgedCreation = { request_id: string; ticket_id: number; scope: string; confirmedAt: number };
+type StoredAcknowledgements = { version: 1; entries: GlpiAcknowledgedCreation[] };
 export type GlpiDraftStorageStatus = 'ok' | 'unavailable' | 'corrupt' | 'quota';
 export type GlpiDraftStorageResult = { ok: true } | { ok: false; reason: Exclude<GlpiDraftStorageStatus, 'ok'> };
 type StorageRead = { status: GlpiDraftStorageStatus; store: StoredRequests };
@@ -34,8 +36,12 @@ type DraftListener = (pending: PendingGlpiRequest | null) => void;
 export const GLPI_UNCERTAIN_STORAGE_KEY = 'sumatoni-glpi-uncertain-v2:anonymous';
 export const GLPI_UNCERTAIN_STORAGE_NAMESPACE = 'sumatoni-glpi-uncertain-v2:';
 export const GLPI_UNCERTAIN_LEGACY_STORAGE_KEY = 'sumatoni-glpi-uncertain-v1';
+export const GLPI_ACKNOWLEDGED_STORAGE_KEY = 'sumatoni-glpi-acknowledged-v1:anonymous';
+export const GLPI_ACKNOWLEDGED_STORAGE_NAMESPACE = 'sumatoni-glpi-acknowledged-v1:';
 export const GLPI_UNCERTAIN_MAX_REQUESTS = 4;
 export const GLPI_UNCERTAIN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const GLPI_ACKNOWLEDGED_TTL_MS = 31 * 24 * 60 * 60 * 1000;
+const GLPI_ACKNOWLEDGED_MAX_ENTRIES = 64;
 const MAX_STORAGE_BYTES = 32_000;
 const UUID = /^[a-f0-9-]{36}$/;
 const sourceId = `sumatoni-${Math.random().toString(36).slice(2)}`;
@@ -50,16 +56,41 @@ function browserStorage(): StorageLike | null {
   }
 }
 
+// The server's acknowledged_at is committed before its HTTP response reaches
+// the browser. Keep the separate client-confirmed fact durable so a cold page
+// can distinguish a consumed result from an ACK response lost in transit.
+// sessionStorage is only a fallback for environments that explicitly disable
+// localStorage (it still preserves the invariant within the current tab).
+function browserAcknowledgementStorages(): StorageLike[] {
+  if (typeof window === 'undefined') return [];
+  const stores: StorageLike[] = [];
+  try { if (window.localStorage) stores.push(window.localStorage); } catch {}
+  try { if (window.sessionStorage && !stores.includes(window.sessionStorage)) stores.push(window.sessionStorage); } catch {}
+  return stores;
+}
+
 function memberStorageKey(memberId = '') {
   return memberId ? GLPI_UNCERTAIN_STORAGE_NAMESPACE + encodeURIComponent(memberId) : GLPI_UNCERTAIN_STORAGE_KEY;
+}
+
+function acknowledgedStorageKey(memberId = '') {
+  return memberId ? GLPI_ACKNOWLEDGED_STORAGE_NAMESPACE + encodeURIComponent(memberId) : GLPI_ACKNOWLEDGED_STORAGE_KEY;
 }
 
 export function glpiUncertainStorageKey(memberId = '') {
   return memberStorageKey(memberId);
 }
 
+export function glpiAcknowledgedStorageKey(memberId = '') {
+  return acknowledgedStorageKey(memberId);
+}
+
 function emptyStore(): StoredRequests {
   return { version: 2, requests: [] };
+}
+
+function emptyAcknowledgements(): StoredAcknowledgements {
+  return { version: 1, entries: [] };
 }
 
 function payload(value: unknown): value is GlpiRequestPayload {
@@ -89,6 +120,52 @@ function distinctCapability(value: unknown): value is GlpiDistinctCapability {
   const candidate = value as Partial<GlpiDistinctCapability>;
   return typeof candidate.intent_id === 'string' && /^[a-f0-9]{64}$/.test(candidate.intent_id)
     && typeof candidate.expiresAt === 'string' && Number.isFinite(Date.parse(candidate.expiresAt));
+}
+
+function acknowledgement(value: unknown): value is GlpiAcknowledgedCreation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Partial<GlpiAcknowledgedCreation>;
+  return typeof candidate.request_id === 'string' && UUID.test(candidate.request_id)
+    && typeof candidate.ticket_id === 'number' && Number.isSafeInteger(candidate.ticket_id) && candidate.ticket_id > 0
+    && typeof candidate.scope === 'string' && candidate.scope.length <= 512
+    && typeof candidate.confirmedAt === 'number' && Number.isFinite(candidate.confirmedAt);
+}
+
+function readAcknowledgements(storage: StorageLike | null, memberId = ''): { status: GlpiDraftStorageStatus; store: StoredAcknowledgements } {
+  if (!storage) return { status: 'unavailable', store: emptyAcknowledgements() };
+  try {
+    const raw = storage.getItem(acknowledgedStorageKey(memberId));
+    if (raw === null) return { status: 'ok', store: emptyAcknowledgements() };
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { status: 'corrupt', store: emptyAcknowledgements() };
+    const value = parsed as { version?: unknown; entries?: unknown };
+    if (value.version !== 1 || !Array.isArray(value.entries) || value.entries.some(item => !acknowledgement(item))) {
+      return { status: 'corrupt', store: emptyAcknowledgements() };
+    }
+    return {
+      status: 'ok',
+      store: {
+        version: 1,
+        entries: value.entries.filter((item): item is GlpiAcknowledgedCreation => acknowledgement(item) && item.confirmedAt > Date.now() - GLPI_ACKNOWLEDGED_TTL_MS).slice(0, GLPI_ACKNOWLEDGED_MAX_ENTRIES),
+      },
+    };
+  } catch {
+    return { status: 'unavailable', store: emptyAcknowledgements() };
+  }
+}
+
+function writeAcknowledgements(storage: StorageLike | null, store: StoredAcknowledgements, memberId = ''): GlpiDraftStorageResult {
+  if (!storage) return { ok: false, reason: 'unavailable' };
+  try {
+    const serialized = JSON.stringify(store);
+    const bytes = typeof TextEncoder === 'undefined' ? serialized.length : new TextEncoder().encode(serialized).byteLength;
+    if (bytes > MAX_STORAGE_BYTES) return { ok: false, reason: 'quota' };
+    storage.setItem(acknowledgedStorageKey(memberId), serialized);
+    return { ok: true };
+  } catch (error) {
+    const name = error && typeof error === 'object' && 'name' in error ? String((error as { name: unknown }).name) : '';
+    return { ok: false, reason: name === 'QuotaExceededError' ? 'quota' : 'unavailable' };
+  }
 }
 
 function liveCapability(value: GlpiDistinctCapability | undefined) {
@@ -217,7 +294,7 @@ export function subscribePendingGlpiRequest(memberId: string, listener: DraftLis
   };
 }
 
-export function savePendingGlpiRequest(value: GlpiRequestPayload, storage: StorageLike | null | undefined = browserStorage(), memberId = '', distinctIntent?: GlpiDistinctCapability, options: { preserveExpiredCapability?: boolean } = {}): GlpiDraftStorageResult {
+export function savePendingGlpiRequest(value: GlpiRequestPayload, storage: StorageLike | null | undefined = browserStorage(), memberId = '', distinctIntent?: GlpiDistinctCapability, options: { preserveExpiredCapability?: boolean; announce?: boolean } = {}): GlpiDraftStorageResult {
   if (!payload(value)) return { ok: false, reason: 'corrupt' };
   const target = storage ?? browserStorage();
   const current = readStore(target, memberId);
@@ -229,7 +306,7 @@ export function savePendingGlpiRequest(value: GlpiRequestPayload, storage: Stora
   const capability = options.preserveExpiredCapability ? distinctIntent : liveCapability(distinctIntent);
   requests.unshift({ payload: { ...value }, savedAt: Date.now(), ...(capability ? { distinctIntent: { ...capability } } : {}) });
   const result = writeStore(target, { version: 2, requests: requests.slice(0, GLPI_UNCERTAIN_MAX_REQUESTS) }, memberId);
-  if (result.ok) announce(memberId, { payload: { ...value }, savedAt: Date.now(), ...(capability ? { distinctIntent: { ...capability } } : {}) });
+  if (result.ok && options.announce !== false) announce(memberId, { payload: { ...value }, savedAt: Date.now(), ...(capability ? { distinctIntent: { ...capability } } : {}) });
   return result;
 }
 
@@ -250,4 +327,43 @@ export function removePendingGlpiRequest(requestId: string, storage: StorageLike
   }
   if (result.ok) announce(memberId, null);
   return result;
+}
+
+/**
+ * Persist the fact that the browser received a successful ACK response. This
+ * is intentionally separate from the pending-operation store: the pending
+ * UUID must remain until this marker is durable, otherwise a lost ACK response
+ * leaves a cold page with no way to identify the exact result to replay.
+ */
+export function markGlpiCreationAcknowledged(memberId: string, requestId: string, ticketId: number, scope = '', storage?: StorageLike | null): GlpiDraftStorageResult {
+  if (!UUID.test(requestId) || !Number.isSafeInteger(ticketId) || ticketId <= 0 || typeof scope !== 'string' || scope.length > 512) return { ok: false, reason: 'corrupt' };
+  const targets = storage === undefined ? browserAcknowledgementStorages() : [storage];
+  let last: GlpiDraftStorageResult = { ok: false, reason: 'unavailable' };
+  for (const target of targets) {
+    const current = readAcknowledgements(target, memberId);
+    if (current.status !== 'ok') { last = { ok: false, reason: current.status }; continue; }
+    const entries = current.store.entries
+      .filter(entry => entry.request_id !== requestId && entry.confirmedAt > Date.now() - GLPI_ACKNOWLEDGED_TTL_MS);
+    entries.unshift({ request_id: requestId, ticket_id: ticketId, scope, confirmedAt: Date.now() });
+    const result = writeAcknowledgements(target, { version: 1, entries: entries.slice(0, GLPI_ACKNOWLEDGED_MAX_ENTRIES) }, memberId);
+    if (result.ok) return result;
+    last = result;
+  }
+  return last;
+}
+
+/**
+ * Read only a durable client confirmation. With no scope supplied (the cold
+ * initial render has not received the API envelope yet), any member-scoped
+ * marker is sufficient. Once the server scope is known, an exact match is
+ * required so one account cannot hide a result belonging to another GLPI API.
+ */
+export function isGlpiCreationAcknowledged(memberId: string, requestId: string, scope?: string, storage?: StorageLike | null): boolean {
+  if (!UUID.test(requestId)) return false;
+  const targets = storage === undefined ? browserAcknowledgementStorages() : [storage];
+  return targets.some(target => {
+    const current = readAcknowledgements(target, memberId);
+    if (current.status !== 'ok') return false;
+    return current.store.entries.some(entry => entry.request_id === requestId && (scope === undefined || entry.scope === scope));
+  });
 }
