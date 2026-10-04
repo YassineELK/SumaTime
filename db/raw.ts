@@ -49,7 +49,9 @@ export function sqlite() {
     CREATE TABLE IF NOT EXISTS glpi_creation_intents (
       intent_id TEXT PRIMARY KEY,
       member_id TEXT NOT NULL REFERENCES members(id), api_url TEXT NOT NULL,
-      scope_request_id TEXT, draft_request_id TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+      scope_request_id TEXT, draft_request_id TEXT, draft_payload_json TEXT,
+      generation INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
       abandoned_at TEXT, used_at TEXT, used_request_id TEXT, used_payload_hash TEXT, operation_request_id TEXT
     );
     CREATE INDEX IF NOT EXISTS glpi_creation_intents_member
@@ -101,12 +103,21 @@ export function sqlite() {
     if (!creationColumns.some(column => column.name === 'distinct_intent_id')) {
       db.exec('ALTER TABLE glpi_creations ADD COLUMN distinct_intent_id TEXT');
     }
-    const intentColumns = db.prepare('PRAGMA table_info(glpi_creation_intents)').all() as { name: string }[];
+    let intentColumns = db.prepare('PRAGMA table_info(glpi_creation_intents)').all() as { name: string }[];
     if (!intentColumns.some(column => column.name === 'draft_request_id')) {
       db.exec('ALTER TABLE glpi_creation_intents ADD COLUMN draft_request_id TEXT');
     }
-    db.exec(`CREATE INDEX IF NOT EXISTS glpi_creation_intents_draft_request
-      ON glpi_creation_intents(member_id,api_url,draft_request_id,created_at);`);
+    intentColumns = db.prepare('PRAGMA table_info(glpi_creation_intents)').all() as { name: string }[];
+    if (!intentColumns.some(column => column.name === 'draft_payload_json')) {
+      db.exec('ALTER TABLE glpi_creation_intents ADD COLUMN draft_payload_json TEXT');
+    }
+    if (!intentColumns.some(column => column.name === 'generation')) {
+      db.exec('ALTER TABLE glpi_creation_intents ADD COLUMN generation INTEGER NOT NULL DEFAULT 0');
+    }
+   db.exec(`CREATE INDEX IF NOT EXISTS glpi_creation_intents_draft_request
+     ON glpi_creation_intents(member_id,api_url,draft_request_id,created_at);`);
+    db.exec(`CREATE INDEX IF NOT EXISTS glpi_creation_intents_draft_generation
+      ON glpi_creation_intents(member_id,api_url,draft_request_id,generation);`);
     if (!intentColumns.some(column => column.name === 'abandoned_at')) {
       db.exec('ALTER TABLE glpi_creation_intents ADD COLUMN abandoned_at TEXT');
     }
@@ -212,6 +223,31 @@ export function sqlite() {
     db.exec(`UPDATE glpi_creation_aliases
       SET result_json=(SELECT result_json FROM glpi_creations WHERE request_id=operation_request_id),
           expires_at=(SELECT expires_at FROM glpi_creations WHERE request_id=operation_request_id)`);
+
+    // A draft UUID is a durable creation identity.  There may be many audit
+    // rows for it over time, but at most one unused, non-abandoned intent may
+    // be active.  Older round-10 databases could contain two rows from
+    // concurrent renewals; preserve the highest transactional generation and
+    // tombstone every other candidate before installing the constraint.
+    const duplicateIntents = db.prepare(`SELECT member_id,api_url,draft_request_id
+      FROM glpi_creation_intents
+      WHERE draft_request_id IS NOT NULL AND abandoned_at IS NULL AND used_at IS NULL
+      GROUP BY member_id,api_url,draft_request_id HAVING COUNT(*) > 1`).all() as { member_id: string; api_url: string; draft_request_id: string }[];
+    for (const duplicate of duplicateIntents) {
+      const rows = db.prepare(`SELECT intent_id,created_at,generation
+        FROM glpi_creation_intents
+        WHERE member_id=? AND api_url=? AND draft_request_id=?
+          AND abandoned_at IS NULL AND used_at IS NULL
+        ORDER BY generation DESC,created_at DESC,rowid DESC`).all(duplicate.member_id, duplicate.api_url, duplicate.draft_request_id) as { intent_id: string; created_at: string; generation: number }[];
+      const winner = rows[0];
+      for (const loser of rows.slice(1)) {
+        db.prepare(`UPDATE glpi_creation_intents SET abandoned_at=?
+          WHERE intent_id=? AND abandoned_at IS NULL AND used_at IS NULL`).run(winner?.created_at || new Date().toISOString(), loser.intent_id);
+      }
+    }
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS glpi_creation_intents_active_draft_unique
+      ON glpi_creation_intents(member_id,api_url,draft_request_id)
+      WHERE draft_request_id IS NOT NULL AND abandoned_at IS NULL AND used_at IS NULL`);
     db.exec('DROP INDEX IF EXISTS glpi_creations_live_fingerprint_unique');
     db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS glpi_creations_live_fingerprint_unique
       ON glpi_creations(member_id,api_url,payload_hash)
