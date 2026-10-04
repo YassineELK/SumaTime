@@ -125,6 +125,9 @@ export const GLPI_DISTINCT_INTENT_TTL_MS = 10 * 60 * 1000;
 export class GlpiCreationUncertain extends AuthError {
   constructor(public readonly operation?: GlpiCreationOperation) { super('La création est en cours ou son résultat est incertain. Vérifiez vos tickets dans GLPI avant toute nouvelle demande ; cette demande ne sera pas renvoyée automatiquement.', 409); }
 }
+export class GlpiDistinctRequired extends AuthError {
+  constructor() { super('Une demande identique est déjà terminée. Utilisez explicitement « Commencer une nouvelle demande distincte » pour autoriser un nouvel incident.', 409); }
+}
 export function glpiWriteEnabled() { return process.env.GLPI_WRITE_ENABLED === 'true'; }
 function createInput(value: unknown): GlpiCreateInput {
  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new AuthError('Vérifiez le client, le titre, la description et les options du ticket.');
@@ -416,7 +419,7 @@ export async function createGlpiTicket(member:string,config:Config,rawInput:unkn
        linkCreationAlias(db, input, existing);
        return { row: existing, reserved: false };
      }
-    if (terminalCreation(db, member, config.api, fingerprint)) throw new AuthError('Une demande identique est déjà terminée. Utilisez explicitement « Commencer une nouvelle demande distincte » pour autoriser un nouvel incident.', 409);
+    if (terminalCreation(db, member, config.api, fingerprint)) throw new GlpiDistinctRequired();
    }
    const createdAt = new Date().toISOString();
    const reserved = db.prepare(`INSERT OR IGNORE INTO glpi_creations

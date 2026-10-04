@@ -29,6 +29,8 @@ let appChild;
 let glpi;
 let checks = 0;
 let createdCallbacks = 0;
+let rateLimitMemberId = '';
+const uiCreateBodies = [];
 
 const equal = (actual, expected, message) => { assert.deepEqual(actual, expected, message); checks++; };
 const ok = (value, message) => { assert.ok(value, message); checks++; };
@@ -132,6 +134,11 @@ function setStorage(value) {
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, writable: true, value });
   Object.defineProperty(dom.window, 'localStorage', { configurable: true, writable: true, value });
 }
+function resetCreateRateLimit(memberId) {
+  const database = new DatabaseSync(databasePath);
+  database.prepare('DELETE FROM login_limits WHERE key=?').run('glpi-create:' + memberId);
+  database.close();
+}
 
 const dom = new JSDOM('<!doctype html><html><body><div id="root-a"></div><div id="root-b"></div></body></html>', { url: 'http://127.0.0.1/' });
 for (const name of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLButtonElement', 'HTMLInputElement', 'HTMLTextAreaElement', 'HTMLSelectElement', 'HTMLAnchorElement', 'Node', 'NodeFilter', 'Element', 'DocumentFragment', 'MutationObserver', 'getComputedStyle', 'Event', 'CustomEvent', 'MouseEvent', 'KeyboardEvent', 'FocusEvent']) {
@@ -155,6 +162,7 @@ globalThis.fetch = async (input, init = {}) => {
   if (activeCookie) headers.set('Cookie', activeCookie);
   if (String(init.method || 'GET').toUpperCase() === 'POST') headers.set('Origin', currentBase);
   const body = typeof init.body === 'string' ? (() => { try { return JSON.parse(init.body); } catch { return null; } })() : null;
+  if (target.pathname === '/api/glpi' && body?.action === 'createTicket') uiCreateBodies.push({ ...body });
   const response = await rawFetch(target, { ...init, headers });
   if (target.pathname === '/api/glpi' && body?.action === 'createTicket' && dropNextCreateResponse) {
     dropNextCreateResponse = false;
@@ -220,12 +228,13 @@ async function openFresh(container) {
 }
 async function submitTicket(container, client, title, description) {
   await openFresh(container);
-  const form = document.querySelector('form.quick-form');
+  const form = [...document.querySelectorAll('form.quick-form')].at(-1);
   assert.ok(form, `form exists before submit: ${document.body.textContent}`);
   setField(form, 'select', client.id);
   setField(form, 'input[maxlength="250"]', title);
   setField(form, 'textarea', description);
   await settle(500);
+  resetCreateRateLimit(rateLimitMemberId);
   await act(async () => { form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(650); });
 }
 async function consumeTicket() {
@@ -267,6 +276,7 @@ async function main() {
   const alice = users.alice;
   const bob = users.bob;
   const client = users.client;
+  rateLimitMemberId = alice.id;
 
   // Round 6 P2-1: the distinct UI action obtains a member/API-scoped,
   // single-use server capability before the second identical business payload
@@ -287,6 +297,7 @@ async function main() {
   setField(distinctForm, 'input[maxlength="250"]', 'ROUND6 DISTINCT INTENT');
   setField(distinctForm, 'textarea', 'The same payload is a new incident only after the explicit action.');
   await settle(500);
+  resetCreateRateLimit(rateLimitMemberId);
   await act(async () => { distinctForm.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(700); });
   equal(ticketCalls().length, distinctBefore + 2, 'the server-authorized identical payload creates exactly one second mock Ticket');
   await consumeTicket();
@@ -298,7 +309,103 @@ async function main() {
   await unmountTicket(mounted);
   await api('alice', { action: 'createTicket', request_id: randomUUID(), client_id: client.id, title: 'ROUND6 DISTINCT INTENT', description: 'The same payload is a new incident only after the explicit action.', type: 1, urgency: 3, category: 0 }, '/api/glpi', 409);
   equal(ticketCalls().length, distinctBefore + 2, 'a bare UUID cannot bypass the terminal fingerprint guard');
-  const providerBaseline = distinctBefore + 2;
+
+  // Round 7 P2-1: after consuming a result, a fresh draft with the same
+  // business fields must expose the server-required distinct transition. The
+  // transition survives a close/reopen, authorizes one single-use intent, and
+  // an accepted response lost in the browser is reconciled without a second
+  // provider Ticket POST.
+  setStorage(null);
+  activeCookie = cookies.get('alice');
+  uiCreateBodies.length = 0;
+  const ackConflictBefore = ticketCalls().length;
+  const ackConflictTitle = 'ROUND7 ACK CONFLICT';
+  const ackConflictDescription = 'A consumed result must offer an explicit distinct transition.';
+  mounted = await mountTicket(alice.id, users.clients);
+  await submitTicket(mounted.container, client, ackConflictTitle, ackConflictDescription);
+  equal(ticketCalls().length, ackConflictBefore + 1, 'the ACK conflict fixture creates its first provider Ticket exactly once');
+  await consumeTicket();
+  await openFresh(mounted.container);
+  let conflictForm = document.querySelector('form.quick-form');
+  assert.ok(conflictForm);
+  setField(conflictForm, 'select', client.id);
+  setField(conflictForm, 'input[maxlength="250"]', ackConflictTitle);
+  setField(conflictForm, 'textarea', ackConflictDescription);
+  await settle(500);
+  resetCreateRateLimit(rateLimitMemberId);
+  await act(async () => { conflictForm.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(700); });
+  equal(ticketCalls().length, ackConflictBefore + 1, 'the same consumed fingerprint is rejected without a provider retry');
+  ok(/Nouvelle demande distincte requise/.test(document.body.textContent), 'the draft conflict explains that a distinct request is required');
+  ok(button(document, 'Commencer une nouvelle demande distincte'), 'the draft conflict exposes the explicit distinct action');
+  const closeConflict = button(document, 'Fermer');
+  ok(closeConflict, 'the conflicted draft remains closable');
+  await act(async () => { closeConflict.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); await wait(80); });
+  await openFresh(mounted.container);
+  ok(/Nouvelle demande distincte requise/.test(document.body.textContent), 'closing and reopening preserves the actionable draft conflict');
+  const reopenedDistinct = button(document, 'Commencer une nouvelle demande distincte');
+  ok(reopenedDistinct, 'the distinct action remains reachable after reopening');
+  await act(async () => { reopenedDistinct.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); await wait(700); });
+  await waitFor(() => !!document.querySelector('form.quick-form') && !document.querySelector('.glpi-conflict'));
+  conflictForm = document.querySelector('form.quick-form');
+  assert.ok(conflictForm);
+  equal(conflictForm.querySelector('input[maxlength="250"]')?.value, ackConflictTitle, 'distinct transition keeps the original business title');
+  equal(conflictForm.querySelector('textarea')?.value, ackConflictDescription, 'distinct transition keeps the original business description');
+  await settle(500);
+  dropNextCreateResponse = true;
+  resetCreateRateLimit(rateLimitMemberId);
+  await act(async () => { conflictForm.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(700); });
+  equal(ticketCalls().length, ackConflictBefore + 2, 'the authorized distinct draft emits exactly one second provider Ticket POST');
+  ok(/Résultat incertain|Résultat récupéré|Ticket créé/.test(document.body.textContent), 'the accepted distinct response remains recoverable after browser loss');
+  const retryBody = { ...uiCreateBodies.at(-1) };
+  if (/Résultat incertain/.test(document.body.textContent)) await act(async () => { button(document, 'Récupérer le résultat')?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); await wait(700); });
+  await waitFor(() => /Ticket créé dans GLPI/.test(document.body.textContent));
+  const retryResult = await api('alice', retryBody, '/api/glpi');
+  ok(retryResult.ticket, 'retrying the same authorized UUID replays the authoritative result');
+  equal(ticketCalls().length, ackConflictBefore + 2, 'idempotent distinct retry emits no second provider Ticket POST');
+  await consumeTicket();
+  await unmountTicket(mounted);
+
+  // Round 7 P2-2: a certain provider rejection tombstones its UUID. The UI
+  // immediately rotates to a fresh UUID, keeps the correction usable across
+  // close/reopen, and the corrected payload is the only one that can create.
+  setStorage(null);
+  activeCookie = cookies.get('alice');
+  uiCreateBodies.length = 0;
+  const rejectionBefore = ticketCalls().length;
+  mounted = await mountTicket(alice.id, users.clients);
+  await openFresh(mounted.container);
+  let rejectionForm = document.querySelector('form.quick-form');
+  assert.ok(rejectionForm);
+  setField(rejectionForm, 'select', client.id);
+  setField(rejectionForm, 'input[maxlength="250"]', 'REJECT-CREATE');
+  setField(rejectionForm, 'textarea', 'A certain provider rejection must not be retried with its tombstoned UUID.');
+  await settle(500);
+  resetCreateRateLimit(rateLimitMemberId);
+  await act(async () => { rejectionForm.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(700); });
+  equal(ticketCalls().length, rejectionBefore + 1, 'the certain rejection reaches the mock provider exactly once');
+  ok(!/Résultat incertain/.test(document.body.textContent), 'a certain rejection is not presented as uncertain');
+  const rejectedBody = { ...uiCreateBodies.at(-1) };
+  const rejectionDb = new DatabaseSync(databasePath);
+  const rejectedRow = rejectionDb.prepare('SELECT state FROM glpi_creations WHERE request_id=?').get(rejectedBody.request_id);
+  rejectionDb.close();
+  equal(rejectedRow?.state, 'rejected', 'the refused UUID is a terminal rejected tombstone');
+  const closeRejected = button(document, 'Fermer');
+  ok(closeRejected, 'the rejected draft remains closable');
+  await act(async () => { closeRejected.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); await wait(80); });
+  await openFresh(mounted.container);
+  rejectionForm = document.querySelector('form.quick-form');
+  assert.ok(rejectionForm);
+  setField(rejectionForm, 'input[maxlength="250"]', 'ROUND7 REJECT CORRECTED');
+  await settle(500);
+  resetCreateRateLimit(rateLimitMemberId);
+  await act(async () => { rejectionForm.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(700); });
+  const correctedBody = { ...uiCreateBodies.at(-1) };
+  ok(correctedBody.request_id !== rejectedBody.request_id, 'correction automatically starts a fresh operation UUID');
+  equal(ticketCalls().length, rejectionBefore + 2, 'the corrected payload emits one accepted provider Ticket POST');
+  await consumeTicket();
+  await unmountTicket(mounted);
+
+  const providerBaseline = ticketCalls().length;
 
   // P2-1 + crash/restart: quota storage loses only the browser response. The
   // provider creates once, the DB survives a Next SIGKILL, and explicit
@@ -415,11 +522,19 @@ async function main() {
   const simultaneous = await api('alice', null, '/api/glpi?uncertain=1');
   const authoritative = simultaneous.requests.find(request => request.payload.title === 'SIMULTANEOUS FINGERPRINT');
   ok(authoritative?.ticket, 'second tab receives the authoritative operation/result');
+  const winnerIndex = processPayloads.findIndex(payload => payload.request_id === authoritative?.payload.request_id);
+  const loserIndex = processPayloads.findIndex((payload, index) => index !== winnerIndex && payload.request_id !== authoritative?.payload.request_id);
+  ok(winnerIndex >= 0 && loserIndex >= 0, 'the authoritative result dynamically identifies the concurrent winner and loser');
+  if (winnerIndex < 0 || loserIndex < 0) throw new Error('Concurrent result did not identify both process roles');
+  ok(processResults[winnerIndex].body.ticket?.id === authoritative.ticket.id || processResults[winnerIndex].body.operation?.ticket?.id === authoritative.ticket.id, 'the dynamically identified winner reports the authoritative ticket');
+  ok(processResults[loserIndex].status === 200 || processResults[loserIndex].status === 409, 'the dynamically identified loser is either an idempotent replay or a fail-closed uncertainty');
+  if (processResults[loserIndex].status === 200) equal(processResults[loserIndex].body.ticket.id, authoritative.ticket.id, 'a loser that completed after the winner still returns the same ticket');
+  else equal(processResults[loserIndex].body.operation?.payload.request_id, authoritative.payload.request_id, 'a fail-closed loser points at the authoritative operation');
   await api('alice', { action: 'acknowledgeCreation', request_id: authoritative.payload.request_id, ticket_id: authoritative.ticket.id }, '/api/glpi');
   const replayResponse = await rawFetch(currentBase + '/api/glpi', {
     method: 'POST',
     headers: { Cookie: cookies.get('alice'), Origin: currentBase, 'Content-Type': 'application/json' },
-    body: JSON.stringify(processPayloads[1]),
+    body: JSON.stringify(processPayloads[loserIndex]),
   });
   const replayBody = await replayResponse.json();
   ok(replayResponse.status === 200 || replayResponse.status === 409, 'a raced secondary UUID either replays the result or fails closed');
@@ -438,12 +553,12 @@ async function main() {
   persistedDb.prepare('UPDATE glpi_creations SET expires_at=? WHERE payload_hash=?').run('2000-01-01T00:00:00.000Z', authoritativeHash);
   persistedDb.prepare('UPDATE glpi_creation_aliases SET expires_at=? WHERE operation_request_id=?').run('2000-01-01T00:00:00.000Z', authoritative.payload.request_id);
   persistedDb.close();
-  const staleOriginal = await api('alice', processPayloads[0], '/api/glpi');
+  const staleOriginal = await api('alice', processPayloads[winnerIndex], '/api/glpi');
   equal(staleOriginal.ticket.id, authoritative.ticket.id, 'the expired original UUID replays its terminal result');
   const staleSecondaryResponse = await rawFetch(currentBase + '/api/glpi', {
     method: 'POST',
     headers: { Cookie: cookies.get('alice'), Origin: currentBase, 'Content-Type': 'application/json' },
-    body: JSON.stringify(processPayloads[1]),
+    body: JSON.stringify(processPayloads[loserIndex]),
   });
   const staleSecondary = await staleSecondaryResponse.json();
   ok(staleSecondaryResponse.status === 200 || staleSecondaryResponse.status === 409, 'an expired secondary UUID replays a durable alias or fails closed');
