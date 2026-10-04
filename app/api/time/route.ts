@@ -193,7 +193,7 @@ export async function POST(request: Request) {
       if (existing && (!Number.isInteger(body.version) || body.version < 1)) throw new HttpError('Version non valide.');
       if (existing?.billed) throw new HttpError('Cette prestation est facturée. Un administrateur doit d’abord la rouvrir.', 409);
       const unchangedIdentity = !!existing && existing.client_id === clientId && existing.ticket === claimedTicket && existing.ticket_source === claimedSource && existing.glpi_ticket_id === (claimedGlpiId ?? null);
-      let ticket: string, ticketSource: TicketSource, glpiTicketId: number | null;
+      let ticket: string, ticketSource: TicketSource, glpiTicketId: number | null, verifiedEntity: number | null = null;
       if (unchangedIdentity) {
         ticket = existing.ticket; ticketSource = existing.ticket_source; glpiTicketId = existing.glpi_ticket_id;
       } else if (claimedSource === 'pending' && claimedGlpiId == null) {
@@ -201,15 +201,18 @@ export async function POST(request: Request) {
       } else if (claimedSource === 'glpi' && validGlpiTicketId(claimedGlpiId)) {
         const verified = await validateGlpiTicketSelection(member.id, claimedGlpiId, clientId);
         ticket = verified.ticket; ticketSource = verified.ticket_source; glpiTicketId = verified.glpi_ticket_id;
+        verifiedEntity = verified.entity;
       } else {
         throw new AuthError('Sélectionnez un ticket GLPI proposé ou choisissez explicitement « À compléter ».', 400, { code: 'TICKET_SELECTION_REQUIRED', retryable: false, preserveOperation: true });
       }
-      const client = await db.prepare('SELECT active,hourly_rate_cents,onsite_hourly_rate_cents FROM clients WHERE id=?').bind(clientId).first<{ active: number; hourly_rate_cents: number | null; onsite_hourly_rate_cents: number | null }>();
+      const client = await db.prepare('SELECT active,glpi_entity_id,hourly_rate_cents,onsite_hourly_rate_cents FROM clients WHERE id=?').bind(clientId).first<{ active: number; glpi_entity_id: number | null; hourly_rate_cents: number | null; onsite_hourly_rate_cents: number | null }>();
+      if (verifiedEntity !== null && (!client || !client.active || client.glpi_entity_id !== verifiedEntity)) throw new AuthError('Le ticket GLPI ne correspond plus au client actif sélectionné.', 409, { code: 'TICKET_CLIENT_MISMATCH', retryable: false, preserveOperation: true });
       if (!client || (!client.active && existing?.client_id !== clientId)) throw new HttpError('Choisissez un client actif.');
       const owner = existing?.member_id || member.id;
       const overlap = 'NOT EXISTS (SELECT 1 FROM entries WHERE member_id=? AND date=? AND start<? AND end>? AND id<>?)';
       const hourlyRate = existing && existing.client_id === clientId && existing.on_site === onSite ? existing.hourly_rate_cents : onSite === null ? null : onSite ? client.onsite_hourly_rate_cents ?? client.hourly_rate_cents : client.hourly_rate_cents;
       const result = transaction(tx => {
+        if (verifiedEntity !== null && !tx.prepare('SELECT id FROM clients WHERE id=? AND active=1 AND glpi_entity_id=?').get(clientId, verifiedEntity)) throw new AuthError('Le ticket GLPI ne correspond plus au client actif sélectionné.', 409, { code: 'TICKET_CLIENT_MISMATCH', retryable: false, preserveOperation: true });
         if (!existing) {
           const live = tx.prepare('SELECT * FROM entries WHERE id=?').get(id) as Entry | undefined;
           if (live) {
@@ -217,9 +220,11 @@ export async function POST(request: Request) {
             throw new HttpError('Cet enregistrement existe déjà. Actualisez la liste.', 409);
           }
         }
+        const clientGuard = verifiedEntity === null ? '1=1' : 'EXISTS (SELECT 1 FROM clients WHERE id=? AND active=1 AND glpi_entity_id=?)';
+        const guardValues = verifiedEntity === null ? [] : [clientId, verifiedEntity];
         const changed = existing
-          ? tx.prepare(`UPDATE entries SET client_id=?,ticket=?,ticket_source=?,glpi_ticket_id=?,date=?,start=?,end=?,description=?,on_site=?,hourly_rate_cents=?,updated_at=?,version=version+1 WHERE id=? AND version=? AND billed=0 AND ${overlap}`).run(clientId, ticket, ticketSource, glpiTicketId, date, start, end, description, onSite, hourlyRate, now, id, body.version, owner, date, end, start, id)
-          : tx.prepare(`INSERT INTO entries (id,member_id,client_id,ticket,ticket_source,glpi_ticket_id,date,start,end,description,on_site,hourly_rate_cents,billed,version,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,? WHERE ${overlap}`).run(id, owner, clientId, ticket, ticketSource, glpiTicketId, date, start, end, description, onSite, hourlyRate, now, now, owner, date, end, start, id);
+          ? tx.prepare(`UPDATE entries SET client_id=?,ticket=?,ticket_source=?,glpi_ticket_id=?,date=?,start=?,end=?,description=?,on_site=?,hourly_rate_cents=?,updated_at=?,version=version+1 WHERE id=? AND version=? AND billed=0 AND ${clientGuard} AND ${overlap}`).run(clientId, ticket, ticketSource, glpiTicketId, date, start, end, description, onSite, hourlyRate, now, id, body.version, ...guardValues, owner, date, end, start, id)
+          : tx.prepare(`INSERT INTO entries (id,member_id,client_id,ticket,ticket_source,glpi_ticket_id,date,start,end,description,on_site,hourly_rate_cents,billed,version,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,? WHERE ${clientGuard} AND ${overlap}`).run(id, owner, clientId, ticket, ticketSource, glpiTicketId, date, start, end, description, onSite, hourlyRate, now, now, ...guardValues, owner, date, end, start, id);
         if (changed.changes && onSite === 1) tx.prepare('INSERT OR IGNORE INTO travel_days (member_id,client_id,date,fee_cents,anchor_entry_id) SELECT ?,?,?,travel_fee_cents,? FROM members WHERE id=?').run(owner, clientId, date, id, owner);
         return { meta: { changes: Number(changed.changes) } };
       });

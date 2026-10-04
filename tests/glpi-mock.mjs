@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
-export async function mockGlpi(port=8790,allowedEntities=[4,9]) {
+export async function mockGlpi(port=8790,allowedEntities=[4,9],options={}) {
   const sessions=new Map(),calls=[],activeEntities=new Map();
   const tickets=Array.from({length:13},(_,i)=>({id:101+i,name:i===0?'Configurer le VPN du nouveau collaborateur':i===1?'Diagnostic réseau — agence Bruxelles':i===2?'Installation du poste et accès Microsoft 365':'Intervention de démonstration '+(i+1),status:i===2?5:i%4+1,entities_id:i===1?(allowedEntities[1]??allowedEntities[0]):allowedEntities[0]}));
   const server=createServer((req,res)=>{
@@ -12,11 +12,11 @@ export async function mockGlpi(port=8790,allowedEntities=[4,9]) {
     if(req.headers['app-token']!=='mock-app-token')return send(403,['BAD_APP_TOKEN','secret should never leak']);
     if(path==='initSession'){
       const token=req.headers.authorization?.replace('user_token ','');
-      if(!['alice-test-token','bob-test-token','admin-test-token','broken-test-token','redirect-test-token','slow-test-token','entity-false-test-token','entity-http-error-test-token','entity-malformed-test-token'].includes(token))return send(401,['BAD_TOKEN','secret should never leak']);
+      if(!['alice-test-token','bob-test-token','admin-test-token','broken-test-token','redirect-test-token','slow-test-token','entity-false-test-token','entity-http-error-test-token','entity-malformed-test-token','race-archive-test-token','race-remap-test-token'].includes(token))return send(401,['BAD_TOKEN','secret should never leak']);
       const session=randomUUID();sessions.set(session,token);return send(200,{session_token:session});
     }
     const user=sessions.get(req.headers['session-token']);if(!user)return send(401,['SESSION_EXPIRED']);
-    if(path==='killSession'){activeEntities.delete(req.headers['session-token']);sessions.delete(req.headers['session-token']);return send(200,true);}
+    if(path==='killSession'){options.onSessionCleanup?.(user);activeEntities.delete(req.headers['session-token']);sessions.delete(req.headers['session-token']);return send(200,true);}
     if(path==='getMyProfiles')return send(200,{myprofiles:[{id:1,name:'Technicien'}]});
     if(user==='redirect-test-token'){res.writeHead(302,{Location:'http://127.0.0.1:8791/leak'});return res.end();}
     if(user==='slow-test-token'){const timer=setTimeout(()=>send(200,{}),20000);res.on('close',()=>clearTimeout(timer));return;}

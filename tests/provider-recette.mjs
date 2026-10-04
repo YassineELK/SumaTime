@@ -115,6 +115,18 @@ await call(alice,{...verifiedTimer,id:randomUUID(),glpi_ticket_id:102},'/api/wor
 await call(bob,{...verifiedTimer,id:randomUUID()},'/api/workday',400);equal((await call(bob)).timer,null);
 const verifiedEntry={action:'saveEntry',id:randomUUID(),client_id:client.id,ticket:'invented display ignored',ticket_source:'glpi',glpi_ticket_id:101,date:'2026-09-16',start:'08:00',end:'08:15',description:'Verified identity',on_site:false};
 await call(alice,verifiedEntry,'/api/time');equal({...db.prepare('SELECT ticket,ticket_source,glpi_ticket_id FROM entries WHERE id=?').get(verifiedEntry.id)},{ticket:'GLPI-101',ticket_source:'glpi',glpi_ticket_id:101});
+// Session cleanup deterministically changes the client after Ticket/101 was
+// validated but before the local write. Both writes must fail atomically.
+const racedEntry={...verifiedEntry,id:randomUUID(),ticket:'À compléter',ticket_source:'pending',glpi_ticket_id:null,start:'08:30',end:'08:45'};
+await call(alice,racedEntry,'/api/time');
+await call(alice,{action:'connect',token:'race-archive-test-token'},'/api/glpi');
+const archivedRace=await call(alice,{...racedEntry,version:1,ticket_source:'glpi',glpi_ticket_id:101},'/api/time',409);equal(archivedRace.code,'TICKET_CLIENT_MISMATCH');equal({...db.prepare('SELECT ticket_source,glpi_ticket_id,version FROM entries WHERE id=?').get(racedEntry.id)},{ticket_source:'pending',glpi_ticket_id:null,version:1});
+db.prepare('UPDATE clients SET active=1,glpi_entity_id=4 WHERE id=?').run(client.id);
+await call(alice,{action:'connect',token:'race-remap-test-token'},'/api/glpi');
+const racedTimer={...verifiedTimer,id:randomUUID()};
+const remappedRace=await call(alice,racedTimer,'/api/workday',409);equal(remappedRace.code,'TICKET_CLIENT_MISMATCH');equal(db.prepare('SELECT COUNT(*) AS n FROM work_timers WHERE id=?').get(racedTimer.id).n,0);
+db.prepare('UPDATE clients SET active=1,glpi_entity_id=4 WHERE id=?').run(client.id);
+await call(alice,{action:'connect',token:'alice-test-token'},'/api/glpi');
 await call(alice,{action:'disconnect'},'/api/glpi');await call(alice,verifiedEntry,'/api/time'); // exact replay precedes provider validation
 await call(alice,{action:'connect',token:'alice-test-token'},'/api/glpi');
 await call(alice,{...verifiedEntry,id:randomUUID(),ticket_source:undefined,glpi_ticket_id:null,start:'08:15',end:'08:30'},'/api/time',400);

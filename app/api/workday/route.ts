@@ -46,19 +46,24 @@ export async function POST(request: Request) {
         throw new AuthError('Un chronomètre est déjà présent. Terminez-le avant d’en commencer un autre.', 409);
       }
       if (sqlite().prepare('SELECT id FROM timer_receipts WHERE id=?').get(body.id)) throw new AuthError('Ce chronomètre a déjà été enregistré.', 409);
-      let ticket: string, ticketSource: 'glpi' | 'pending', glpiTicketId: number | null;
+      let ticket: string, ticketSource: 'glpi' | 'pending', glpiTicketId: number | null, verifiedEntity: number | null = null;
       if (body.ticket_source === 'pending' && body.glpi_ticket_id == null) {
         ticket = PENDING_TICKET_LABEL; ticketSource = 'pending'; glpiTicketId = null;
       } else if (body.ticket_source === 'glpi' && validGlpiTicketId(body.glpi_ticket_id)) {
         const verified = await validateGlpiTicketSelection(me.id, body.glpi_ticket_id, body.client_id);
         ticket = verified.ticket; ticketSource = 'glpi'; glpiTicketId = verified.glpi_ticket_id;
+        verifiedEntity = verified.entity;
       } else throw new AuthError('Sélectionnez un ticket GLPI proposé ou choisissez explicitement « À compléter ».', 400, { code: 'TICKET_SELECTION_REQUIRED', retryable: false, preserveOperation: true });
       transaction(db => {
         const live = current(me.id);
         if (live) { if (live.id === body.id && live.client_id === body.client_id && live.ticket === ticket && live.ticket_source === ticketSource && live.glpi_ticket_id === glpiTicketId && live.description === body.description && live.on_site === Number(body.on_site)) return; throw new AuthError('Un chronomètre est déjà présent. Terminez-le avant d’en commencer un autre.', 409); }
         if (db.prepare('SELECT id FROM timer_receipts WHERE id=?').get(body.id)) throw new AuthError('Ce chronomètre a déjà été enregistré.', 409);
-        if (!db.prepare('SELECT id FROM clients WHERE id=? AND active=1').get(body.client_id)) throw new AuthError('Choisissez un client actif.');
-        db.prepare('INSERT INTO work_timers (member_id,id,client_id,ticket,ticket_source,glpi_ticket_id,description,on_site,started_at) VALUES (?,?,?,?,?,?,?,?,?)').run(me.id, body.id, body.client_id, ticket, ticketSource, glpiTicketId, body.description, Number(body.on_site), now);
+        if (verifiedEntity !== null && !db.prepare('SELECT id FROM clients WHERE id=? AND active=1 AND glpi_entity_id=?').get(body.client_id, verifiedEntity)) throw new AuthError('Le ticket GLPI ne correspond plus au client actif sélectionné.', 409, { code: 'TICKET_CLIENT_MISMATCH', retryable: false, preserveOperation: true });
+        if (verifiedEntity === null && !db.prepare('SELECT id FROM clients WHERE id=? AND active=1').get(body.client_id)) throw new AuthError('Choisissez un client actif.');
+        const inserted = verifiedEntity === null
+          ? db.prepare('INSERT INTO work_timers (member_id,id,client_id,ticket,ticket_source,glpi_ticket_id,description,on_site,started_at) VALUES (?,?,?,?,?,?,?,?,?)').run(me.id, body.id, body.client_id, ticket, ticketSource, glpiTicketId, body.description, Number(body.on_site), now)
+          : db.prepare('INSERT INTO work_timers (member_id,id,client_id,ticket,ticket_source,glpi_ticket_id,description,on_site,started_at) SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM clients WHERE id=? AND active=1 AND glpi_entity_id=?)').run(me.id, body.id, body.client_id, ticket, ticketSource, glpiTicketId, body.description, Number(body.on_site), now, body.client_id, verifiedEntity);
+        if (!inserted.changes) throw new AuthError('Le ticket GLPI ne correspond plus au client actif sélectionné.', 409, { code: 'TICKET_CLIENT_MISMATCH', retryable: false, preserveOperation: true });
       });
     } else {
       if (typeof body.id !== 'string') throw new AuthError('Chronomètre invalide.');
