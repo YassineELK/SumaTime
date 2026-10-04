@@ -5,14 +5,15 @@ import { Check, ExternalLink, Plus } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import type { Client } from '@/lib/types';
 import type { GlpiCreationOperation, GlpiTicket } from '@/lib/glpi';
-import { announcePendingGlpiRequest, getGlpiDraftStorageStatus, readPendingGlpiRequest, removePendingGlpiRequest, savePendingGlpiRequest, subscribePendingGlpiRequest, type GlpiDraftStorageStatus, type GlpiRequestPayload, type PendingGlpiRequest } from '@/lib/glpi-draft';
+import { isTerminalGlpiFailure } from '@/lib/glpi-contract';
+import { announcePendingGlpiRequest, getGlpiDraftStorageStatus, readPendingGlpiRequest, removePendingGlpiRequest, savePendingGlpiRequest, subscribePendingGlpiRequest, type GlpiDistinctCapability, type GlpiDraftStorageStatus, type GlpiRequestPayload, type PendingGlpiRequest } from '@/lib/glpi-draft';
 
 type Status = { configured: boolean; connected: boolean; canCreate: boolean; web: string | null };
 type Category = { id: number; name: string };
 type Form = GlpiRequestPayload;
 type ServerRequest = GlpiCreationOperation;
 type LegacyRequest = { request_id: string; createdAt: string; apiUrl: string };
-type ApiValue = { ok?: boolean; error?: string; uncertain?: boolean; terminal?: boolean; retryable?: boolean; distinct_required?: boolean; ticket?: GlpiTicket; operation?: ServerRequest; categories?: Category[]; limited?: boolean; requests?: ServerRequest[]; recoverable?: ServerRequest[]; legacy?: LegacyRequest[]; blocked?: boolean; intent_id?: string; expiresAt?: string } & Partial<Status>;
+type ApiValue = { ok?: boolean; error?: string; code?: string; uncertain?: boolean; terminal?: boolean; retryable?: boolean; preserveOperation?: boolean; intent_consumed?: boolean; distinct_required?: boolean; ticket?: GlpiTicket; operation?: ServerRequest; categories?: Category[]; limited?: boolean; requests?: ServerRequest[]; recoverable?: ServerRequest[]; legacy?: LegacyRequest[]; blocked?: boolean; intent_id?: string; expiresAt?: string } & Partial<Status>;
 type AsyncKind = 'pending' | 'status' | 'options' | 'submit' | 'ack' | 'resolve' | 'intent';
 type UiMode = 'idle' | 'draft' | 'uncertain' | 'result';
 type RecoveryAction = 'reauth' | 'retry' | null;
@@ -36,16 +37,27 @@ function canonical(form: Form): Form {
   return { ...form, client_id: form.client_id.trim(), title: form.title.trim(), description: form.description.trim() };
 }
 
-function transientStatus(status: number) {
-  return status === 401 || status === 403 || status === 408 || status === 425 || status === 429 || status >= 500;
+async function apiValue(response: Response): Promise<ApiValue> {
+  try {
+    const value: unknown = await response.json();
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as ApiValue : {};
+  } catch {
+    // A malformed/empty response is an unknown outcome. It must stay
+    // fail-closed even if the HTTP status happens to be a 4xx.
+    return { code: 'MALFORMED_RESPONSE', terminal: false, retryable: true, preserveOperation: true, error: 'La réponse du serveur est inexploitable ; l’opération reste conservée.' };
+  }
 }
 
-function terminalFailure(response: Response, value: ApiValue) {
-  if (transientStatus(response.status)) return false;
-  if (value.uncertain === true) return false;
-  if (value.retryable === true) return false;
-  if (value.terminal === true || value.distinct_required === true) return true;
-  return response.status >= 400 && response.status < 500;
+function capability(value: PendingGlpiRequest['distinctIntent'] | null | undefined): GlpiDistinctCapability | null {
+  return value && /^[a-f0-9]{64}$/.test(value.intent_id) && Number.isFinite(Date.parse(value.expiresAt)) && Date.parse(value.expiresAt) > Date.now()
+    ? { intent_id: value.intent_id, expiresAt: value.expiresAt }
+    : null;
+}
+
+function terminalFailure(value: ApiValue, hasCapability = false) {
+  // The server contract is authoritative. Never infer terminality from an
+  // HTTP status, an unknown code, a missing body, or a message heuristic.
+  return isTerminalGlpiFailure(value, hasCapability);
 }
 
 export default function NewGlpiTicket({ clients, memberId = '', initialClient = '', initialDescription = '', disabled = false, onCreated }: { clients: Client[]; memberId?: string; initialClient?: string; initialDescription?: string; disabled?: boolean; onCreated: (ticket: GlpiTicket) => void }) {
@@ -82,7 +94,8 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
   const currentCreated = useRef<GlpiTicket | null>(null);
   const draftOwned = useRef(false);
   const serverPending = useRef<ServerRequest | null>(null);
-  const distinctIntent = useRef<string | null>(null);
+  const distinctIntent = useRef<string | null>(capability(initialPending?.distinctIntent)?.intent_id || null);
+  const distinctIntentExpiresAt = useRef<string | null>(capability(initialPending?.distinctIntent)?.expiresAt || null);
   const serverBlockedRef = useRef(false);
   const controllers = useRef(new Map<AsyncKind, AbortController>());
   const sequences = useRef<Record<AsyncKind, number>>({ pending: 0, status: 0, options: 0, submit: 0, ack: 0, resolve: 0, intent: 0 });
@@ -136,6 +149,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     currentCreated.current = null;
     serverPending.current = null;
     distinctIntent.current = null;
+    distinctIntentExpiresAt.current = null;
     serverBlockedRef.current = false;
     setOpen(false);
     setStatus(null);
@@ -170,6 +184,9 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     }
     operation.current = pendingRequest.payload;
     uncertainPayload.current = pendingRequest.payload;
+    const pendingCapability = capability(pendingRequest.distinctIntent);
+    distinctIntent.current = pendingCapability?.intent_id || null;
+    distinctIntentExpiresAt.current = pendingCapability?.expiresAt || null;
     currentCreated.current = null;
     setForm(pendingRequest.payload);
     setUncertain(true);
@@ -241,9 +258,12 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       const recoverable = includeAcknowledged ? (value.recoverable || []).filter(item => !consumedOperations.has(consumedKey(memberId, item.payload.request_id))) : [];
       const requests = [...(value.requests || []), ...recoverable];
       const activeId = operation.current?.request_id;
+      // A locally persisted distinct draft is authoritative for this tab even
+      // when the server has an older uncertain operation with the same
+      // business fields. Never let polling alias the new UUID back to it.
       const matching = requests.find(item => activeId && item.payload.request_id === activeId)
-        || requests.find(item => (!initialClient || item.payload.client_id === initialClient) && (!initialDescription.trim() || item.payload.description === initialDescription.trim()))
-        || (!draftOwned.current ? requests[0] : undefined);
+        || (!activeId && requests.find(item => (!initialClient || item.payload.client_id === initialClient) && (!initialDescription.trim() || item.payload.description === initialDescription.trim())))
+        || (!activeId && !draftOwned.current ? requests[0] : undefined);
       if (matching) {
         serverPending.current = matching;
         if (adopt || !draftOwned.current) applyServerRequest(matching);
@@ -318,21 +338,51 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     setError('');
   }
 
+  function currentCapability(): GlpiDistinctCapability | undefined {
+    const value = capability(distinctIntent.current && distinctIntentExpiresAt.current
+      ? { intent_id: distinctIntent.current, expiresAt: distinctIntentExpiresAt.current }
+      : undefined);
+    if (!value) {
+      distinctIntent.current = null;
+      distinctIntentExpiresAt.current = null;
+    }
+    return value || undefined;
+  }
+
+  function clearDistinctCapability() {
+    distinctIntent.current = null;
+    distinctIntentExpiresAt.current = null;
+  }
+
   function updateForm(patch: Partial<Form>) {
     markDraft();
     setDistinctRequired(false);
-    setForm(value => ({ ...value, ...patch }));
+    const next = { ...form, ...patch };
+    setForm(next);
+    const active = currentCapability();
+    if (active) {
+      const stored = savePendingGlpiRequest(next, undefined, memberId, active);
+      if (!stored.ok) setStorageIssue(stored.reason);
+    }
   }
 
-  function enterDraft(clientId: string, description: string, seed?: Form) {
+  function enterDraft(clientId: string, description: string, seed?: Form, distinct?: GlpiDistinctCapability): Form {
+    const next = seed
+      ? { ...seed, request_id: crypto.randomUUID(), client_id: clientId || seed.client_id }
+      : newForm(clientId, description);
     draftOwned.current = true;
     operation.current = null;
     serverPending.current = null;
     serverBlockedRef.current = false;
     setMode('draft');
-    setForm(seed
-      ? { ...seed, request_id: crypto.randomUUID(), client_id: clientId || seed.client_id }
-      : newForm(clientId, description));
+    setForm(next);
+    if (distinct) {
+      distinctIntent.current = distinct.intent_id;
+      distinctIntentExpiresAt.current = distinct.expiresAt;
+      const stored = savePendingGlpiRequest(next, undefined, memberId, distinct);
+      if (!stored.ok) setStorageIssue(stored.reason);
+      announcePendingGlpiRequest(memberId, { payload: next, savedAt: Date.now(), distinctIntent: distinct });
+    }
     uncertainPayload.current = null;
     currentCreated.current = null;
     setCategories([]);
@@ -348,6 +398,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     // A distinct action may intentionally keep the component in `draft`.
     // Advance an explicit generation so options reload for draft → draft.
     setDraftEpoch(epoch => epoch + 1);
+    return next;
   }
 
   async function openNew() {
@@ -367,7 +418,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     if (!mounted.current || currentMember.current !== memberId) return;
     if (found || operation.current || serverBlockedRef.current) return;
     const clientId = clients.some(client => client.id === initialClient && client.active && client.glpi_entity_id !== null) ? initialClient : '';
-    distinctIntent.current = null;
+    clearDistinctCapability();
     enterDraft(clientId, initialDescription);
   }
 
@@ -381,12 +432,12 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
         body: JSON.stringify({ action: 'beginDistinctCreation', ...(previousRequestId ? { previous_request_id: previousRequestId } : {}) }),
         signal: request.controller.signal,
       });
-      const value = await response.json() as ApiValue;
+      const value = await apiValue(response);
       if (!request.valid()) return false;
       if (!response.ok || typeof value.intent_id !== 'string' || !/^[a-f0-9]{64}$/.test(value.intent_id)) throw new Error(value.error || 'L’intention de nouvelle demande n’a pas pu être autorisée.');
-      distinctIntent.current = value.intent_id;
+      if (typeof value.expiresAt !== 'string' || !Number.isFinite(Date.parse(value.expiresAt)) || Date.parse(value.expiresAt) <= Date.now()) throw new Error('L’intention de nouvelle demande a expiré avant son utilisation.');
       const clientId = clients.some(client => client.id === form.client_id && client.active && client.glpi_entity_id !== null) ? form.client_id : '';
-      enterDraft(clientId, '', form);
+      enterDraft(clientId, '', form, { intent_id: value.intent_id, expiresAt: value.expiresAt });
       return true;
     } finally {
       finish('intent', request.controller);
@@ -458,20 +509,20 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     setRecoveryAction(null);
     const payload = canonical(form);
     setForm(payload);
-    const stored = savePendingGlpiRequest(payload, undefined, memberId);
+    const activeCapability = currentCapability();
+    const stored = savePendingGlpiRequest(payload, undefined, memberId, activeCapability);
     if (!stored.ok) setStorageIssue(stored.reason);
-    announcePendingGlpiRequest(memberId, { payload, savedAt: Date.now() });
+    announcePendingGlpiRequest(memberId, { payload, savedAt: Date.now(), ...(activeCapability ? { distinctIntent: activeCapability } : {}) });
     const request = begin('submit');
     let certainResponse = false;
     let distinctConflict = false;
     try {
       const response = await fetch('/api/glpi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, action: 'createTicket', ...(distinctIntent.current ? { distinct_intent: distinctIntent.current } : {}) }), signal: request.controller.signal });
-      const value = await response.json() as ApiValue;
+      const value = await apiValue(response);
       if (!request.valid()) return;
       if (!response.ok) {
-        distinctIntent.current = null;
-        certainResponse = terminalFailure(response, value);
-        distinctConflict = response.status === 409 && (value.distinct_required === true || /demande identique|nouvelle demande distincte|utilisez explicitement.*distinct/i.test(value.error || ''));
+        certainResponse = terminalFailure(value, !!activeCapability);
+        distinctConflict = value.distinct_required === true || value.code === 'DISTINCT_REQUIRED';
         const authoritative = value.operation?.payload || payload;
         if (value.operation) {
           operation.current = authoritative;
@@ -486,7 +537,9 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
         throw new Error(value.error || 'Création impossible.');
       }
       if (!value.ticket) throw new Error('La réponse GLPI est incomplète.');
-      distinctIntent.current = null;
+      // A successful response is the server's confirmation that any
+      // capability attached to this reservation was consumed atomically.
+      clearDistinctCapability();
       const authoritative = value.operation || { payload, createdAt: new Date().toISOString(), ticket: value.ticket };
       operation.current = authoritative.payload;
       uncertainPayload.current = authoritative.payload;
@@ -513,6 +566,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
         setRecoveryAction('retry');
         setError('Résultat incertain : la demande a peut-être été acceptée par GLPI. Vérifiez vos tickets avant toute nouvelle demande.');
       } else {
+        clearDistinctCapability();
         removePendingGlpiRequest(payload.request_id, undefined, memberId);
         announcePendingGlpiRequest(memberId, null);
         operation.current = null;
@@ -546,14 +600,14 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     const request = begin('submit');
     let terminalResponse = false;
     let responseStatus: number | null = null;
+    const activeCapability = currentCapability();
     try {
       const response = await fetch('/api/glpi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, action: 'createTicket', ...(distinctIntent.current ? { distinct_intent: distinctIntent.current } : {}) }), signal: request.controller.signal });
       responseStatus = response.status;
-      const value = await response.json() as ApiValue;
+      const value = await apiValue(response);
       if (!request.valid()) return;
       if (!response.ok) {
-        if (value.operation || value.uncertain) distinctIntent.current = null;
-        terminalResponse = terminalFailure(response, value);
+        terminalResponse = terminalFailure(value, !!activeCapability);
         if (value.operation?.payload) {
           operation.current = value.operation.payload;
           uncertainPayload.current = value.operation.payload;
@@ -562,7 +616,9 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
         throw new Error(value.error || 'Le résultat reste incertain.');
       }
       if (!value.ticket) throw new Error('Le résultat reste incertain.');
-      distinctIntent.current = null;
+      // A successful replay confirms the same reservation and any attached
+      // capability; this is the only normal path that clears it client-side.
+      clearDistinctCapability();
       const authoritative = value.operation || { payload, createdAt: new Date().toISOString(), ticket: value.ticket };
       operation.current = authoritative.payload;
       uncertainPayload.current = authoritative.payload;
@@ -582,7 +638,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       if (request.valid()) {
         if (terminalResponse) {
           const fresh = uncertainPayload.current || operation.current || payload;
-          distinctIntent.current = null;
+          clearDistinctCapability();
           removePendingGlpiRequest(payload.request_id, undefined, memberId);
           announcePendingGlpiRequest(memberId, null);
           operation.current = null;

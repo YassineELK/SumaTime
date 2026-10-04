@@ -8,9 +8,15 @@ export type GlpiRequestPayload = {
   category: number;
 };
 
+// This is a server-issued capability, never a client-generated permission.
+// It is stored only beside a member-namespaced draft and remains subject to
+// the server's member/API binding and expiry checks.
+export type GlpiDistinctCapability = { intent_id: string; expiresAt: string };
+
 export type PendingGlpiRequest = {
   payload: GlpiRequestPayload;
   savedAt: number;
+  distinctIntent?: GlpiDistinctCapability;
 };
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -72,9 +78,21 @@ function payload(value: unknown): value is GlpiRequestPayload {
 
 function pending(value: unknown): value is PendingGlpiRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const candidate = value as { payload?: unknown; savedAt?: unknown };
+  const candidate = value as { payload?: unknown; savedAt?: unknown; distinctIntent?: unknown };
   return payload(candidate.payload) && typeof candidate.savedAt === 'number'
-    && Number.isFinite(candidate.savedAt) && candidate.savedAt > Date.now() - GLPI_UNCERTAIN_TTL_MS;
+    && Number.isFinite(candidate.savedAt) && candidate.savedAt > Date.now() - GLPI_UNCERTAIN_TTL_MS
+    && (candidate.distinctIntent === undefined || distinctCapability(candidate.distinctIntent));
+}
+
+function distinctCapability(value: unknown): value is GlpiDistinctCapability {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Partial<GlpiDistinctCapability>;
+  return typeof candidate.intent_id === 'string' && /^[a-f0-9]{64}$/.test(candidate.intent_id)
+    && typeof candidate.expiresAt === 'string' && Number.isFinite(Date.parse(candidate.expiresAt));
+}
+
+function liveCapability(value: GlpiDistinctCapability | undefined) {
+  return value && Date.parse(value.expiresAt) > Date.now() ? value : undefined;
 }
 
 function readStore(storage: StorageLike | null, memberId = ''): StorageRead {
@@ -147,11 +165,11 @@ function channelFor(memberId: string) {
   try { channel = new BroadcastChannel(key); } catch { return null; }
   try {
     channel.addEventListener('message', event => {
-      const message = event.data as { source?: unknown; kind?: unknown; payload?: unknown } | null;
+      const message = event.data as { source?: unknown; kind?: unknown; payload?: unknown; distinctIntent?: unknown } | null;
       if (!message || message.source === sourceId) return;
       if (message.kind === 'remove') emit(memberId, null);
-      else if (message.kind === 'upsert' && pending({ payload: message.payload, savedAt: Date.now() })) {
-        emit(memberId, { payload: message.payload as GlpiRequestPayload, savedAt: Date.now() });
+      else if (message.kind === 'upsert' && pending({ payload: message.payload, distinctIntent: message.distinctIntent, savedAt: Date.now() })) {
+        emit(memberId, { payload: message.payload as GlpiRequestPayload, savedAt: Date.now(), ...(distinctCapability(message.distinctIntent) ? { distinctIntent: message.distinctIntent } : {}) });
       }
     });
   } catch { try { channel.close(); } catch {} return null; }
@@ -163,7 +181,7 @@ function announce(memberId: string, value: PendingGlpiRequest | null) {
   emit(memberId, value);
   const key = memberStorageKey(memberId);
   const channel = channels.get(key)?.channel || (listeners.get(key)?.size ? channelFor(memberId) : null);
-  try { channel?.postMessage({ source: sourceId, kind: value ? 'upsert' : 'remove', payload: value?.payload }); } catch {}
+  try { channel?.postMessage({ source: sourceId, kind: value ? 'upsert' : 'remove', payload: value?.payload, distinctIntent: value?.distinctIntent }); } catch {}
 }
 
 export function announcePendingGlpiRequest(memberId: string, value: PendingGlpiRequest | null) {
@@ -199,15 +217,16 @@ export function subscribePendingGlpiRequest(memberId: string, listener: DraftLis
   };
 }
 
-export function savePendingGlpiRequest(value: GlpiRequestPayload, storage: StorageLike | null | undefined = browserStorage(), memberId = ''): GlpiDraftStorageResult {
+export function savePendingGlpiRequest(value: GlpiRequestPayload, storage: StorageLike | null | undefined = browserStorage(), memberId = '', distinctIntent?: GlpiDistinctCapability): GlpiDraftStorageResult {
   if (!payload(value)) return { ok: false, reason: 'corrupt' };
   const target = storage ?? browserStorage();
   const current = readStore(target, memberId);
   if (current.status !== 'ok') return { ok: false, reason: current.status };
   const requests = current.store.requests.filter(item => item.payload.request_id !== value.request_id);
-  requests.unshift({ payload: { ...value }, savedAt: Date.now() });
+  const capability = liveCapability(distinctIntent);
+  requests.unshift({ payload: { ...value }, savedAt: Date.now(), ...(capability ? { distinctIntent: { ...capability } } : {}) });
   const result = writeStore(target, { version: 2, requests: requests.slice(0, GLPI_UNCERTAIN_MAX_REQUESTS) }, memberId);
-  if (result.ok) announce(memberId, { payload: { ...value }, savedAt: Date.now() });
+  if (result.ok) announce(memberId, { payload: { ...value }, savedAt: Date.now(), ...(capability ? { distinctIntent: { ...capability } } : {}) });
   return result;
 }
 

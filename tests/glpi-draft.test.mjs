@@ -49,6 +49,19 @@ test('member namespaces never expose one account draft to another account', () =
   assert.deepEqual(readPendingGlpiRequest('', '', target, 'alice-member')?.payload, alice);
 });
 
+test('distinct capability persists only in its member namespace and expires fail-closed', () => {
+  const target = storage();
+  const request = payload('77777777-7777-7777-7777-777777777777', 'Capability survives a transient refusal');
+  const capability = { intent_id: 'a'.repeat(64), expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  assert.deepEqual(savePendingGlpiRequest(request, target, 'alice-member', capability), { ok: true });
+  assert.deepEqual(readPendingGlpiRequest('', '', target, 'bob-member'), null);
+  assert.deepEqual(readPendingGlpiRequest('', '', target, 'alice-member')?.distinctIntent, capability);
+  const expired = storage();
+  const expiredCapability = { intent_id: 'b'.repeat(64), expiresAt: new Date(Date.now() - 1).toISOString() };
+  assert.deepEqual(savePendingGlpiRequest(request, expired, 'alice-member', expiredCapability), { ok: true });
+  assert.equal(readPendingGlpiRequest('', '', expired, 'alice-member')?.distinctIntent, undefined);
+});
+
 test('quota, unavailable and corrupt storage fail closed instead of silently discarding identity', () => {
   const quota = { getItem: () => null, setItem: () => { throw Object.assign(new Error('quota'), { name: 'QuotaExceededError' }); }, removeItem: () => {} };
   assert.deepEqual(savePendingGlpiRequest(payload('44444444-4444-4444-4444-444444444444'), quota), { ok: false, reason: 'quota' });

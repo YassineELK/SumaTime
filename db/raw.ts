@@ -50,7 +50,7 @@ export function sqlite() {
       intent_id TEXT PRIMARY KEY,
       member_id TEXT NOT NULL REFERENCES members(id), api_url TEXT NOT NULL,
       scope_request_id TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
-      used_at TEXT, used_request_id TEXT, used_payload_hash TEXT, operation_request_id TEXT
+      abandoned_at TEXT, used_at TEXT, used_request_id TEXT, used_payload_hash TEXT, operation_request_id TEXT
     );
     CREATE INDEX IF NOT EXISTS glpi_creation_intents_member
       ON glpi_creation_intents(member_id,api_url,created_at);
@@ -100,6 +100,10 @@ export function sqlite() {
     }
     if (!creationColumns.some(column => column.name === 'distinct_intent_id')) {
       db.exec('ALTER TABLE glpi_creations ADD COLUMN distinct_intent_id TEXT');
+    }
+    const intentColumns = db.prepare('PRAGMA table_info(glpi_creation_intents)').all() as { name: string }[];
+    if (!intentColumns.some(column => column.name === 'abandoned_at')) {
+      db.exec('ALTER TABLE glpi_creation_intents ADD COLUMN abandoned_at TEXT');
     }
     // Rows from the old schema that have no payload and no result represent an
     // unresolved provider attempt.  Clear any acknowledgement a previous

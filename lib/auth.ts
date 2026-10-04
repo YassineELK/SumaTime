@@ -4,7 +4,25 @@ import { sqlite } from '@/db/raw';
 import type { Member } from './types';
 export const COOKIE = 'sumatoni_session';
 export const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
-export class AuthError extends Error { constructor(message: string, public status = 400) { super(message); } }
+export type AuthErrorMetadata = {
+  code?: string;
+  terminal?: boolean;
+  retryable?: boolean;
+  preserveOperation?: boolean;
+};
+export class AuthError extends Error {
+  readonly code?: string;
+  readonly terminal?: boolean;
+  readonly retryable?: boolean;
+  readonly preserveOperation?: boolean;
+  constructor(message: string, public status = 400, metadata: AuthErrorMetadata = {}) {
+    super(message);
+    this.code = metadata.code;
+    this.terminal = metadata.terminal;
+    this.retryable = metadata.retryable;
+    this.preserveOperation = metadata.preserveOperation;
+  }
+}
 export function appOrigin(request: Request) {
   if (process.env.APP_URL) return new URL(process.env.APP_URL).origin;
   const url = new URL(request.url);

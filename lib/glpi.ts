@@ -16,7 +16,7 @@ function object(value: unknown): JsonObject | null {
 
 function objectOrThrow(value: unknown, message: string): JsonObject {
   const result = object(value);
-  if (!result) throw new AuthError(message, 502);
+  if (!result) throw new AuthError(message, 502, { code: 'GLPI_RESPONSE_INVALID', retryable: true, preserveOperation: true });
   return result;
 }
 
@@ -27,8 +27,8 @@ function integer(value: unknown): number | null {
 
 export function glpiConfig(): Config | null {
   const value = process.env.GLPI_API_URL?.trim(); if (!value) return null;
-  let url: URL; try { url = new URL(value); } catch { throw new AuthError('L’adresse GLPI configurée sur le serveur est invalide.', 503); }
-  if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) throw new AuthError('GLPI exige une adresse HTTPS sans identifiants ni paramètres.', 503);
+  let url: URL; try { url = new URL(value); } catch { throw new AuthError('L’adresse GLPI configurée sur le serveur est invalide.', 503, { code: 'CONFIG_NOT_READY', retryable: true, preserveOperation: true }); }
+  if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) throw new AuthError('GLPI exige une adresse HTTPS sans identifiants ni paramètres.', 503, { code: 'CONFIG_NOT_READY', retryable: true, preserveOperation: true });
   const api = url.href.replace(/\/+$/, '');
   const web = api.replace(/\/(apirest\.php|api\.php\/v1)$/i, '');
   return { api, web, appToken: process.env.GLPI_APP_TOKEN?.trim() || '' };
@@ -56,23 +56,76 @@ function tokenFor(member: string, config: Config) {
     return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
   } catch { throw new AuthError('Votre connexion GLPI doit être renouvelée. Saisissez à nouveau votre jeton.', 409); }
 }
-export class GlpiCreationTerminal extends AuthError {}
+export type GlpiFailureCode =
+  | 'CREATION_UNCERTAIN'
+  | 'CREATION_REJECTED'
+  | 'DISTINCT_REQUIRED'
+  | 'CONFIG_NOT_READY'
+  | 'GLPI_AUTH_REQUIRED'
+  | 'GLPI_ACCESS_DENIED'
+  | 'GLPI_RATE_LIMITED'
+  | 'GLPI_UNAVAILABLE'
+  | 'GLPI_RESPONSE_INVALID'
+  | 'INVALID_REQUEST'
+  | 'INTENT_INVALID'
+  | 'INTENT_EXPIRED'
+  | 'INTENT_CONSUMED'
+  | 'INTENT_ABANDONED'
+  | 'OPERATION_CONFLICT';
+
+export class GlpiCreationTerminal extends AuthError {
+  public intentConsumed = false;
+  constructor(message: string, status = 409, code: GlpiFailureCode = 'CREATION_REJECTED', intentConsumed = false) {
+    super(message, status, { code, terminal: true, retryable: false, preserveOperation: false });
+    this.intentConsumed = intentConsumed;
+  }
+}
 class GlpiRejected extends GlpiCreationTerminal {}
 async function request(config: Config, path: string, headers: Record<string, string>, signal: AbortSignal, method: 'GET' | 'POST' = 'GET', payload?: unknown): Promise<unknown> {
   try {
     const response = await fetch(config.api + '/' + path, { method, ...(payload === undefined ? {} : { body: JSON.stringify(payload) }), headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...(config.appToken ? { 'App-Token': config.appToken } : {}), ...headers }, signal, redirect: 'error', cache: 'no-store' });
-    if (!response.ok) { await response.body?.cancel(); if(method==='POST'&&path==='Ticket'&&[400,401,403,404,405,422].includes(response.status))throw new GlpiRejected('GLPI a refusé la création. Vérifiez vos droits, la catégorie et les champs obligatoires du modèle de ticket GLPI.',422); throw new AuthError(response.status === 401 || response.status === 403 ? 'GLPI refuse cet accès. Vérifiez votre jeton, vos droits et la configuration API.' : 'GLPI est indisponible. Réessayez dans quelques instants.', 502); }
+    if (!response.ok) {
+      let body: unknown = null;
+      try {
+        const raw = await response.text();
+        if (raw.length <= 2_000_000 && raw.trim()) body = JSON.parse(raw);
+      } catch { /* an unknown/malformed provider body is never terminal */ }
+      const bodyText = (() => {
+        try { return JSON.stringify(body); } catch { return ''; }
+      })();
+      // Only an explicit provider business code is terminal. HTTP status
+      // alone is deliberately insufficient: 401/403/404/405, malformed
+      // bodies and infrastructure failures preserve the operation.
+      const explicitRejection = /ERROR_GLPI_ADD|CREATION_REJECTED|TICKET_REJECTED/i.test(bodyText);
+      if (method === 'POST' && path === 'Ticket' && (response.status === 400 || response.status === 422) && explicitRejection) {
+        throw new GlpiRejected('GLPI a refusé la création. Vérifiez vos droits, la catégorie et les champs obligatoires du modèle de ticket GLPI.', 422, 'CREATION_REJECTED');
+      }
+      const code: GlpiFailureCode = response.status === 401 ? 'GLPI_AUTH_REQUIRED'
+        : response.status === 403 ? 'GLPI_ACCESS_DENIED'
+          : response.status === 429 ? 'GLPI_RATE_LIMITED'
+            : 'GLPI_UNAVAILABLE';
+      throw new AuthError(response.status === 401 || response.status === 403
+        ? 'GLPI refuse cet accès. Vérifiez votre jeton, vos droits et la configuration API.'
+        : 'GLPI est indisponible. Réessayez dans quelques instants.', 502, { code, retryable: true, preserveOperation: true });
+    }
     const reader = response.body?.getReader(); if (!reader) throw new Error('Empty');
     const chunks: Uint8Array[] = []; let length = 0;
     while (true) { const part = await reader.read(); if (part.done) break; length += part.value.length; if (length > 2_000_000) { await reader.cancel(); throw new Error('Large'); } chunks.push(part.value); }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-  } catch (error) { if (error instanceof AuthError) throw error; throw new AuthError('Impossible de joindre GLPI. Vérifiez la connexion et les certificats du serveur.', 502); }
+    try {
+      return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    } catch {
+      throw new AuthError('GLPI a renvoyé une réponse JSON invalide.', 502, { code: 'GLPI_RESPONSE_INVALID', retryable: true, preserveOperation: true });
+    }
+  } catch (error) {
+    if (error instanceof AuthError) throw error;
+    throw new AuthError('Impossible de joindre GLPI. Vérifiez la connexion et les certificats du serveur.', 502, { code: 'GLPI_UNAVAILABLE', retryable: true, preserveOperation: true });
+  }
 }
 async function session<T>(config: Config, token: string, work: (get: GlpiGet, post: GlpiPost) => Promise<T>) {
   const signal = AbortSignal.timeout(15000);
   const auth = await request(config, 'initSession', { Authorization: 'user_token ' + token }, signal);
   const authObject = objectOrThrow(auth, 'GLPI n’a pas ouvert de session valide.');
-  if (typeof authObject.session_token !== 'string' || !authObject.session_token) throw new AuthError('GLPI n’a pas ouvert de session valide.', 502);
+  if (typeof authObject.session_token !== 'string' || !authObject.session_token) throw new AuthError('GLPI n’a pas ouvert de session valide.', 502, { code: 'GLPI_RESPONSE_INVALID', retryable: true, preserveOperation: true });
   const headers = { 'Session-Token': authObject.session_token };
   try { return await work(path => request(config, path, headers, signal), (path, payload) => request(config, path, headers, signal, 'POST', payload)); }
   finally { try { await request(config, 'killSession', headers, AbortSignal.timeout(2000)); } catch {} }
@@ -86,7 +139,7 @@ export async function glpiTickets(member: string, config: Config, query: string,
       return option?.table === 'glpi_tickets' && option.field === name;
     })?.[0];
     const idField = field('id'), nameField = field('name'), statusField = field('status');
-    if (!idField || !nameField || !statusField) throw new AuthError('Les champs de recherche GLPI sont incompatibles avec ce connecteur.', 502);
+    if (!idField || !nameField || !statusField) throw new AuthError('Les champs de recherche GLPI sont incompatibles avec ce connecteur.', 502, { code: 'GLPI_RESPONSE_INVALID', retryable: true, preserveOperation: true });
     const params = new URLSearchParams({ range: `${page * 10}-${page * 10 + 9}`, sort: idField, order: 'DESC', 'forcedisplay[0]': idField, rawdata: 'false', uid_cols: 'false', giveItems: 'false' });
     let index = 0;
     if (query) { params.set(`criteria[${index}][field]`, /^\d+$/.test(query) ? idField : nameField); params.set(`criteria[${index}][searchtype]`, 'contains'); params.set(`criteria[${index}][value]`, /^\d+$/.test(query) ? '^' + query + '$' : query); index++; }
@@ -95,7 +148,7 @@ export async function glpiTickets(member: string, config: Config, query: string,
     const total = integer(result.totalcount);
     const dataObject = object(result.data);
     const data = Array.isArray(result.data) ? result.data : dataObject ? Object.values(dataObject) : null;
-    if (total === null || !data) throw new AuthError('La réponse de GLPI est inattendue.', 502);
+    if (total === null || !data) throw new AuthError('La réponse de GLPI est inattendue.', 502, { code: 'GLPI_RESPONSE_INVALID', retryable: true, preserveOperation: true });
     const idOption = object(options[idField]);
     const idName = typeof idOption?.field === 'string' ? idOption.field : 'id';
     const ids = [...new Set(data.map(row => {
@@ -107,7 +160,7 @@ export async function glpiTickets(member: string, config: Config, query: string,
     for (const id of ids) {
       const ticket = objectOrThrow(await get('Ticket/' + id), 'GLPI a renvoyé un ticket invalide.');
       const ticketId = integer(ticket.id), status = integer(ticket.status), entity = integer(ticket.entities_id);
-      if (ticketId !== id || typeof ticket.name !== 'string' || status === null || entity === null) throw new AuthError('GLPI a renvoyé un ticket invalide.', 502);
+      if (ticketId !== id || typeof ticket.name !== 'string' || status === null || entity === null) throw new AuthError('GLPI a renvoyé un ticket invalide.', 502, { code: 'GLPI_RESPONSE_INVALID', retryable: true, preserveOperation: true });
       const client = sqlite().prepare('SELECT id,name FROM clients WHERE glpi_entity_id=? AND active=1').get(entity) as { id: string; name: string } | undefined;
       tickets.push({ id, title: ticket.name.slice(0, 1000), status, entity, url: config.web + '/front/ticket.form.php?id=' + id, client_id: client?.id || null, client: client?.name || null });
     }
@@ -121,13 +174,18 @@ export type GlpiUncertainRequest = GlpiCreationOperation;
 export type GlpiCreateResult = { ticket: GlpiTicket; operation: GlpiCreationOperation };
 export type GlpiLegacyRequest = { request_id: string; createdAt: string; apiUrl: string };
 export type GlpiDistinctIntent = { intent_id: string; expiresAt: string };
+export type GlpiDistinctCapability = GlpiDistinctIntent;
 export const GLPI_CREATION_RESULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const GLPI_DISTINCT_INTENT_TTL_MS = 10 * 60 * 1000;
 export class GlpiCreationUncertain extends AuthError {
-  constructor(public readonly operation?: GlpiCreationOperation) { super('La création est en cours ou son résultat est incertain. Vérifiez vos tickets dans GLPI avant toute nouvelle demande ; cette demande ne sera pas renvoyée automatiquement.', 409); }
+  public intentConsumed = false;
+  constructor(public readonly operation?: GlpiCreationOperation, intentConsumed = false) {
+    super('La création est en cours ou son résultat est incertain. Vérifiez vos tickets dans GLPI avant toute nouvelle demande ; cette demande ne sera pas renvoyée automatiquement.', 409, { code: 'CREATION_UNCERTAIN', terminal: false, retryable: true, preserveOperation: true });
+    this.intentConsumed = intentConsumed;
+  }
 }
 export class GlpiDistinctRequired extends GlpiCreationTerminal {
-  constructor() { super('Une demande identique est déjà terminée. Utilisez explicitement « Commencer une nouvelle demande distincte » pour autoriser un nouvel incident.', 409); }
+  constructor() { super('Une demande identique est déjà terminée. Utilisez explicitement « Commencer une nouvelle demande distincte » pour autoriser un nouvel incident.', 409, 'DISTINCT_REQUIRED'); }
 }
 export function glpiWriteEnabled() { return process.env.GLPI_WRITE_ENABLED === 'true'; }
 function createInput(value: unknown): GlpiCreateInput {
@@ -147,7 +205,7 @@ function creationFingerprint(input: GlpiCreateInput) {
 }
 type CreationRow = { request_id: string; member_id: string; api_url: string; payload_hash: string; payload_json: string | null; result_json: string | null; acknowledged_at: string | null; expires_at: string | null; legacy_state: string | null; state: string | null; terminal_error: string | null; distinct_intent_id: string | null; created_at: string };
 type AliasRow = { alias_request_id: string; operation_request_id: string; member_id: string; api_url: string; payload_hash: string; result_json: string | null; created_at: string; expires_at: string | null };
-type DistinctIntentRow = { intent_id: string; member_id: string; api_url: string; scope_request_id: string | null; created_at: string; expires_at: string; used_at: string | null; used_request_id: string | null; used_payload_hash: string | null; operation_request_id: string | null };
+type DistinctIntentRow = { intent_id: string; member_id: string; api_url: string; scope_request_id: string | null; created_at: string; expires_at: string; abandoned_at: string | null; used_at: string | null; used_request_id: string | null; used_payload_hash: string | null; operation_request_id: string | null };
 const creationColumns = 'request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,expires_at,legacy_state,state,terminal_error,distinct_intent_id,created_at';
 function operationFromRow(row: Pick<CreationRow, 'payload_json' | 'result_json' | 'created_at'>): GlpiCreationOperation {
   const parsed: unknown = row.payload_json ? JSON.parse(row.payload_json) : null;
@@ -176,32 +234,33 @@ function aliasForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: 
 }
 
 function operationError(row: CreationRow): never {
-  if (row.terminal_error) throw new GlpiCreationTerminal(row.terminal_error, 409);
-  throw new GlpiCreationTerminal('Cette opération GLPI est déjà terminée sans résultat récupérable. Ouvrez une nouvelle demande explicitement.', 409);
+  if (row.terminal_error) throw new GlpiCreationTerminal(row.terminal_error, 409, 'CREATION_REJECTED', !!row.distinct_intent_id);
+  throw new GlpiCreationTerminal('Cette opération GLPI est déjà terminée sans résultat récupérable. Ouvrez une nouvelle demande explicitement.', 409, 'CREATION_REJECTED', !!row.distinct_intent_id);
 }
 
 function verifyIntent(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, intentId: string, requestId: string, fingerprint: string) {
-  const intent = db.prepare(`SELECT intent_id,member_id,api_url,scope_request_id,created_at,expires_at,used_at,used_request_id,used_payload_hash,operation_request_id
+  const intent = db.prepare(`SELECT intent_id,member_id,api_url,scope_request_id,created_at,expires_at,abandoned_at,used_at,used_request_id,used_payload_hash,operation_request_id
     FROM glpi_creation_intents WHERE intent_id=?`).get(intentId) as DistinctIntentRow | undefined;
-  if (!intent) throw new AuthError('L’intention de nouvelle demande est invalide ou inconnue.', 409);
+  if (!intent) throw new AuthError('L’intention de nouvelle demande est invalide ou inconnue.', 409, { code: 'INTENT_INVALID', retryable: false, preserveOperation: true });
   if (intent.member_id !== member || intent.api_url !== apiUrl) throw new AuthError('L’intention de nouvelle demande ne correspond pas à votre session GLPI.', 403);
+  if (intent.abandoned_at) throw new AuthError('L’intention de nouvelle demande a été abandonnée explicitement.', 409, { code: 'INTENT_ABANDONED', terminal: true, retryable: false, preserveOperation: false });
   if (intent.used_at) {
     if (intent.used_request_id === requestId && intent.used_payload_hash === fingerprint) return { intent, reused: true };
-    throw new AuthError('Cette intention de nouvelle demande a déjà été consommée.', 409);
+    throw new AuthError('Cette intention de nouvelle demande a déjà été consommée.', 409, { code: 'INTENT_CONSUMED', terminal: true, retryable: false, preserveOperation: false });
   }
-  if (Date.parse(intent.expires_at) <= Date.now()) throw new AuthError('L’intention de nouvelle demande a expiré. Recommencez explicitement.', 409);
+  if (Date.parse(intent.expires_at) <= Date.now()) throw new AuthError('L’intention de nouvelle demande a expiré. Recommencez explicitement.', 409, { code: 'INTENT_EXPIRED', retryable: false, preserveOperation: true });
   return { intent, reused: false };
 }
 
 function markIntentUsed(db: ReturnType<typeof sqlite>, intent: DistinctIntentRow, requestId: string, fingerprint: string, operationId: string) {
   if (intent.used_at) {
-    if (intent.used_request_id !== requestId || intent.used_payload_hash !== fingerprint || intent.operation_request_id !== operationId) throw new AuthError('Cette intention de nouvelle demande a déjà été consommée.', 409);
+    if (intent.used_request_id !== requestId || intent.used_payload_hash !== fingerprint || intent.operation_request_id !== operationId) throw new AuthError('Cette intention de nouvelle demande a déjà été consommée.', 409, { code: 'INTENT_CONSUMED', terminal: true, retryable: false, preserveOperation: false });
     return;
   }
   const result = db.prepare(`UPDATE glpi_creation_intents
     SET used_at=?,used_request_id=?,used_payload_hash=?,operation_request_id=?
     WHERE intent_id=? AND used_at IS NULL`).run(new Date().toISOString(), requestId, fingerprint, operationId, intent.intent_id);
-  if (!result.changes) throw new AuthError('Cette intention de nouvelle demande a déjà été consommée.', 409);
+  if (!result.changes) throw new AuthError('Cette intention de nouvelle demande a déjà été consommée.', 409, { code: 'INTENT_CONSUMED', terminal: true, retryable: false, preserveOperation: false });
 }
 
 function intentIdFromInput(value: unknown) {
@@ -309,15 +368,19 @@ export function resolveLegacyCreation(member: string, apiUrl: string | undefined
 }
 function mappedClient(id: string) {
  const client=sqlite().prepare('SELECT id,name,glpi_entity_id FROM clients WHERE id=? AND active=1').get(id) as {id:string;name:string;glpi_entity_id:number|null}|undefined;
- if(!client||client.glpi_entity_id===null)throw new AuthError('Associez ce client actif à son entité GLPI avant de créer un ticket.',409);
+ if(!client||client.glpi_entity_id===null)throw new GlpiCreationTerminal('Associez ce client actif à son entité GLPI avant de créer un ticket.',409,'CREATION_REJECTED');
  return client as GlpiClient;
 }
 type GlpiClient = { id: string; name: string; glpi_entity_id: number };
 async function selectEntity(get: GlpiGet, post: GlpiPost, entity: number) {
  const permitted = objectOrThrow(await get('getMyEntities?is_recursive=true'), 'GLPI n’a pas renvoyé vos entités accessibles.');
- if (!Array.isArray(permitted.myentities) || !permitted.myentities.some(value => integer(object(value)?.id) === entity)) throw new AuthError('Votre compte GLPI ne donne pas accès à cette entité client.', 403);
+ if (!Array.isArray(permitted.myentities) || !permitted.myentities.some(value => integer(object(value)?.id) === entity)) throw new GlpiCreationTerminal('Votre compte GLPI ne donne pas accès à cette entité client.', 403, 'CREATION_REJECTED');
  const selected = await post('changeActiveEntities', { entities_id: entity, is_recursive: false });
- if (selected !== true) throw new AuthError('GLPI n’a pas pu sélectionner le contexte d’entité du client. Aucune création ne sera envoyée.', 502);
+ // A valid boolean false is an explicit provider business refusal. Keep the
+ // historical connector status (502) for compatibility, but expose terminal
+ // semantics only through the explicit wire code, never through the status.
+ if (selected === false) throw new GlpiCreationTerminal('GLPI n’a pas pu sélectionner le contexte d’entité du client. Aucune création ne sera envoyée.', 502, 'CREATION_REJECTED');
+ if (selected !== true) throw new AuthError('GLPI n’a pas pu sélectionner le contexte d’entité du client. Aucune création ne sera envoyée.', 502, { code: 'GLPI_RESPONSE_INVALID', retryable: true, preserveOperation: true });
 }
 export async function glpiCreationOptions(member:string,config:Config,clientId:string) {
  if(!glpiWriteEnabled())throw new AuthError('La création GLPI est désactivée dans cet environnement.',403);
@@ -325,7 +388,7 @@ export async function glpiCreationOptions(member:string,config:Config,clientId:s
  return session(config,tokenFor(member,config),async(get,post)=>{
   await selectEntity(get,post,client.glpi_entity_id);
   const categories = await get('ITILCategory?range=0-499');
-  if (!Array.isArray(categories)) throw new AuthError('Les catégories GLPI sont indisponibles.', 502);
+  if (!Array.isArray(categories)) throw new AuthError('Les catégories GLPI sont indisponibles.', 502, { code: 'GLPI_RESPONSE_INVALID', retryable: true, preserveOperation: true });
   return {
     categories: categories.flatMap(value => {
       const category = object(value), id = integer(category?.id), name = typeof category?.completename === 'string' ? category.completename : category?.name;
@@ -357,9 +420,25 @@ export function beginGlpiDistinctCreation(member: string, config: Config, scopeR
     let intentId = randomBytes(32).toString('hex');
     while (db.prepare('SELECT 1 FROM glpi_creation_intents WHERE intent_id=?').get(intentId)) intentId = randomBytes(32).toString('hex');
     db.prepare(`INSERT INTO glpi_creation_intents
-      (intent_id,member_id,api_url,scope_request_id,created_at,expires_at,used_at,used_request_id,used_payload_hash,operation_request_id)
-      VALUES (?,?,?,?,?,?,NULL,NULL,NULL,NULL)`).run(intentId, member, config.api, scopeRequestId || null, createdAt, expiresAt);
+      (intent_id,member_id,api_url,scope_request_id,created_at,expires_at,abandoned_at,used_at,used_request_id,used_payload_hash,operation_request_id)
+      VALUES (?,?,?,?,?,?,NULL,NULL,NULL,NULL,NULL)`).run(intentId, member, config.api, scopeRequestId || null, createdAt, expiresAt);
     return { intent_id: intentId, expiresAt };
+  });
+}
+
+/**
+ * Explicitly abandon an issued capability. It is an audit tombstone rather
+ * than a DELETE, so a stale tab can never turn the same capability into a
+ * later creation. Expiry alone does not mutate the row.
+ */
+export function abandonGlpiDistinctCreation(member: string, apiUrl: string, intentId: string): { ok: boolean } {
+  return transaction(db => {
+    const row = db.prepare(`SELECT intent_id,member_id,api_url,abandoned_at,used_at
+      FROM glpi_creation_intents WHERE intent_id=?`).get(intentId) as Pick<DistinctIntentRow, 'intent_id' | 'member_id' | 'api_url' | 'abandoned_at' | 'used_at'> | undefined;
+    if (!row || row.member_id !== member || row.api_url !== apiUrl) throw new AuthError('L’intention de nouvelle demande est invalide ou inconnue.', 409, { code: 'INTENT_INVALID', retryable: false, preserveOperation: true });
+    if (row.used_at) return { ok: true };
+    if (!row.abandoned_at) db.prepare('UPDATE glpi_creation_intents SET abandoned_at=? WHERE intent_id=? AND used_at IS NULL AND abandoned_at IS NULL').run(new Date().toISOString(), intentId);
+    return { ok: true };
   });
 }
 
@@ -403,22 +482,22 @@ export async function createGlpiTicket(member:string,config:Config,rawInput:unkn
    if (alias) {
      const aliased = rowForRequest(db, member, config.api, alias.operation_request_id);
      if (!aliased?.payload_json || aliased.payload_hash !== fingerprint) throw new AuthError('Cette identité GLPI est connue mais son opération associée est absente ou incohérente. Aucun nouveau ticket ne sera envoyé.', 409);
-     return { row: aliased, reserved: false };
+     return { row: aliased, reserved: false, intentConsumed: !!aliased.distinct_intent_id };
    }
    if (byRequest) {
-     return { row: byRequest, reserved: false };
+     return { row: byRequest, reserved: false, intentConsumed: !!byRequest.distinct_intent_id };
    }
    const legacy = db.prepare(`SELECT request_id FROM glpi_creations WHERE member_id=?
      AND payload_json IS NULL AND result_json IS NULL AND acknowledged_at IS NULL
      AND COALESCE(legacy_state,'pending')='pending' LIMIT 1`).get(member);
    if (legacy) throw new AuthError('Une opération GLPI historique reste indécise. Vérifiez GLPI puis abandonnez-la explicitement ou récupérez-la avec une preuve avant toute nouvelle création.', 409);
    const intent = distinctIntentId ? verifyIntent(db, member, config.api, distinctIntentId, input.request_id, fingerprint) : undefined;
-   if (intent?.reused) throw new AuthError('L’intention consommée ne possède plus de réservation durable. Aucun nouveau ticket ne sera envoyé.', 409);
+   if (intent?.reused) throw new AuthError('L’intention consommée ne possède plus de réservation durable. Aucun nouveau ticket ne sera envoyé.', 409, { code: 'INTENT_CONSUMED', terminal: true, retryable: false, preserveOperation: false });
    if (!intent) {
      const existing = authoritativeCreation(db, member, config.api, fingerprint);
      if (existing) {
        linkCreationAlias(db, input, existing);
-       return { row: existing, reserved: false };
+       return { row: existing, reserved: false, intentConsumed: !!existing.distinct_intent_id };
      }
     if (terminalCreation(db, member, config.api, fingerprint)) throw new GlpiDistinctRequired();
    }
@@ -431,19 +510,19 @@ export async function createGlpiTicket(member:string,config:Config,rawInput:unkn
      if (!row) throw new AuthError('La réservation GLPI n’a pas pu être conservée. Réessayez après vérification.', 503);
      if (intent) markIntentUsed(db, intent.intent, input.request_id, fingerprint, row.request_id);
      linkCreationAlias(db, input, row);
-     return { row, reserved: true };
+     return { row, reserved: true, intentConsumed: !!intent };
    }
    const winner = authoritativeCreation(db, member, config.api, fingerprint);
    if (!winner?.payload_json) throw new AuthError('Cette demande ne peut pas être réconciliée. Ouvrez un nouveau formulaire après vérification.', 409);
    linkCreationAlias(db, input, winner);
-   return { row: winner, reserved: false };
+   return { row: winner, reserved: false, intentConsumed: !!winner.distinct_intent_id };
  });
  if(!reservation.reserved){
   if (!reservation.row.payload_json) throw new AuthError('Cette demande ne peut pas être réconciliée. Résolvez l’opération historique explicitement.', 409);
   const operation = operationFromRow(reservation.row);
   if(operation.ticket)return { ticket: operation.ticket, operation };
   if (reservation.row.state === 'rejected' || reservation.row.state === 'superseded' || reservation.row.state === 'abandoned') operationError(reservation.row);
-  throw new GlpiCreationUncertain(operation);
+  throw new GlpiCreationUncertain(operation, reservation.intentConsumed);
  }
  const db=sqlite();
  let client;
@@ -452,14 +531,20 @@ export async function createGlpiTicket(member:string,config:Config,rawInput:unkn
    database.prepare('UPDATE glpi_creations SET state=?,legacy_state=?,terminal_error=? WHERE request_id=? AND member_id=? AND api_url=?').run(state, state, message, input.request_id, member, config.api);
  });
  try { client = mappedClient(input.client_id); }
- catch (error) { markCreation('rejected', error); throw error; }
- let sent=false;
+ catch (error) {
+  if (reservation.intentConsumed && error instanceof GlpiCreationTerminal) error.intentConsumed = true;
+  if (error instanceof GlpiCreationTerminal) { markCreation('rejected', error); throw error; }
+  markCreation('uncertain', error);
+  const row = db.prepare('SELECT payload_json,result_json,created_at FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?').get(input.request_id,member,config.api) as Pick<CreationRow, 'payload_json'|'result_json'|'created_at'> | undefined;
+  let operation: GlpiCreationOperation | undefined;
+  try { if (row) operation = operationFromRow(row); } catch { operation = undefined; }
+  throw new GlpiCreationUncertain(operation, reservation.intentConsumed);
+ }
  try{
   const ticket = await session(config,tokenFor(member,config),async(get,post)=>{
    await selectEntity(get,post,client.glpi_entity_id);
    // GLPI applies the personal user's create permissions and ticket templates.
    const escaped=input.description.trim().replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('\n','<br>');
-   sent=true;
    const result = object(await post('Ticket', { input: { name: input.title.trim(), content: escaped, entities_id: client.glpi_entity_id, type: input.type, urgency: input.urgency, itilcategories_id: input.category } }));
    const id = integer(result?.id); if (id === null || id <= 0) throw new GlpiCreationUncertain();
    const ticket:GlpiTicket={id,title:input.title.trim(),status:1,entity:client.glpi_entity_id,url:config.web+'/front/ticket.form.php?id='+id,client_id:client.id,client:client.name};
@@ -474,12 +559,16 @@ export async function createGlpiTicket(member:string,config:Config,rawInput:unkn
   });
   return { ticket, operation };
  }catch(e){
-  if(!sent||e instanceof GlpiRejected){markCreation('rejected', e);throw e;}
+  if (reservation.intentConsumed && e instanceof GlpiCreationTerminal) e.intentConsumed = true;
+  if(e instanceof GlpiCreationTerminal){markCreation('rejected', e);throw e;}
+  // A failure before the provider Ticket POST is still retryable: the
+  // reservation and, when present, the distinct capability are durable. Only
+  // an explicit business terminal error may close this operation.
   markCreation('uncertain');
   // A timeout/error after POST may still have created a ticket. Never retry blindly.
   const row = db.prepare('SELECT payload_json,result_json,created_at FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?').get(input.request_id,member,config.api) as Pick<CreationRow, 'payload_json'|'result_json'|'created_at'> | undefined;
   let operation: GlpiCreationOperation | undefined;
   try { if (row) operation = operationFromRow(row); } catch { operation = undefined; }
-  throw new GlpiCreationUncertain(operation);
+  throw new GlpiCreationUncertain(operation, reservation.intentConsumed);
  }
 }
