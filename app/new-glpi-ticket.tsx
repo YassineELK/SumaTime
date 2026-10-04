@@ -13,7 +13,7 @@ type Category = { id: number; name: string };
 type Form = GlpiRequestPayload;
 type ServerRequest = GlpiCreationOperation;
 type LegacyRequest = { request_id: string; createdAt: string; apiUrl: string };
-type ApiValue = { ok?: boolean; error?: string; code?: string; uncertain?: boolean; terminal?: boolean; retryable?: boolean; preserveOperation?: boolean; intent_consumed?: boolean; distinct_required?: boolean; ticket?: GlpiTicket; operation?: ServerRequest; categories?: Category[]; limited?: boolean; requests?: ServerRequest[]; recoverable?: ServerRequest[]; distinctDrafts?: GlpiDistinctDraft[]; legacy?: LegacyRequest[]; blocked?: boolean; intent_id?: string; expiresAt?: string; draft_request_id?: string; generation?: number; state?: 'active' | 'reserved' | 'completed' | 'uncertain' } & Partial<Status>;
+type ApiValue = { ok?: boolean; error?: string; code?: string; uncertain?: boolean; terminal?: boolean; retryable?: boolean; preserveOperation?: boolean; intent_consumed?: boolean; distinct_required?: boolean; ticket?: GlpiTicket; operation?: ServerRequest; categories?: Category[]; limited?: boolean; requests?: ServerRequest[]; recoverable?: ServerRequest[]; distinctDrafts?: GlpiDistinctDraft[]; legacy?: LegacyRequest[]; blocked?: boolean; intent_id?: string; expiresAt?: string; draft_request_id?: string; generation?: number; terminal_error?: string; state?: 'active' | 'reserved' | 'completed' | 'uncertain' | 'rejected' } & Partial<Status>;
 type AsyncKind = 'pending' | 'status' | 'options' | 'submit' | 'ack' | 'resolve' | 'intent';
 type UiMode = 'idle' | 'draft' | 'uncertain' | 'result';
 type RecoveryAction = 'reauth' | 'retry' | null;
@@ -107,6 +107,10 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
   const currentCreated = useRef<GlpiTicket | null>(null);
   const formRequestIdRef = useRef(initialPending?.payload.request_id || '');
   const draftOwned = useRef(initialDistinctDraft);
+  // `enterDraft` creates a UUID before the user has typed anything. Keep that
+  // pristine state separate from ownership so a cold page can adopt one
+  // server-authoritative distinct draft without overwriting real edits.
+  const pristineDraft = useRef(!initialPending);
   const serverPending = useRef<ServerRequest | null>(null);
   const serverDraftChoicesRef = useRef<GlpiDistinctDraft[]>([]);
   const distinctIntent = useRef<string | null>(initialDistinctMarker?.intent_id || null);
@@ -167,6 +171,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     uncertainPayload.current = null;
     currentCreated.current = null;
     serverPending.current = null;
+    pristineDraft.current = true;
     distinctIntent.current = null;
     distinctIntentExpiresAt.current = null;
     serverBlockedRef.current = false;
@@ -210,6 +215,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     distinctIntentExpiresAt.current = pendingMarker?.expiresAt || null;
     currentCreated.current = null;
     setForm(pendingRequest.payload);
+    pristineDraft.current = false;
     // A marker without a server reservation is a draft, not an uncertain
     // operation. In particular, an expired marker must remain visible so the
     // user can renew the explicit intention for this same UUID.
@@ -253,6 +259,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       return;
     }
     operation.current = request.payload;
+    pristineDraft.current = false;
     uncertainPayload.current = request.payload;
     serverPending.current = request;
     setForm(request.payload);
@@ -280,6 +287,29 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
   const applyServerDraft = useCallback((draft: GlpiDistinctDraft) => {
     serverDraftChoicesRef.current = [];
     setServerDraftChoices([]);
+    if (draft.state === 'rejected') {
+      // A certain provider refusal is a durable terminal state, not an
+      // uncertainty. Keep the rejected UUID visible and require an explicit
+      // new-intent action before any corrected payload can be submitted.
+      operation.current = draft.payload;
+      pristineDraft.current = false;
+      uncertainPayload.current = null;
+      serverPending.current = null;
+      currentCreated.current = null;
+      distinctIntent.current = null;
+      distinctIntentExpiresAt.current = null;
+      draftOwned.current = true;
+      setForm(draft.payload);
+      setUncertain(false);
+      setDistinctRequired(true);
+      setDistinctExpired(false);
+      setCreated(null);
+      setMode('draft');
+      setCategories([]);
+      setPendingChecked(true);
+      setError(draft.terminal_error || 'GLPI a refusé cette demande. Corrigez les champs puis commencez explicitement une nouvelle demande distincte.');
+      return;
+    }
     if (draft.operation) {
       applyServerRequest(draft.operation);
       return;
@@ -300,6 +330,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     serverPending.current = null;
     currentCreated.current = null;
     draftOwned.current = true;
+    pristineDraft.current = false;
     setForm(draft.payload);
     setUncertain(false);
     setDistinctRequired(expired);
@@ -350,7 +381,9 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       // when the server has an older uncertain operation with the same
       // business fields. Never let polling alias the new UUID back to it.
       const matchingDraft = distinctDrafts.find(item => !!activeId && item.draft_request_id === activeId);
-      if (matchingDraft || (!activeId && distinctDrafts.length === 1)) {
+      const canAdoptSingleDraft = distinctDrafts.length === 1
+        && (!activeId || (pristineDraft.current && modeRef.current === 'draft' && !operation.current && !serverPending.current));
+      if (matchingDraft || canAdoptSingleDraft) {
         const selectedDraft = matchingDraft || distinctDrafts[0];
         // A locally persisted live marker may accompany an uncertain retry
         // after an authentication/transport loss. Keep that state and its
@@ -362,13 +395,16 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       }
       // Multiple server-owned drafts require a deliberate choice. Do not
       // guess from a fingerprint or from the first historical ticket.
-      if (!activeId && distinctDrafts.length > 1) {
+      if (distinctDrafts.length > 1 && (!activeId || (pristineDraft.current && modeRef.current === 'draft' && !operation.current && !serverPending.current))) {
         if (adopt || modeRef.current !== 'draft') setPendingChecked(true);
         return null;
       }
       const matching = requests.find(item => activeId && item.payload.request_id === activeId)
         || (!activeId && storageIssue === null && requests.find(item => (!initialClient || item.payload.client_id === initialClient) && (!initialDescription.trim() || item.payload.description === initialDescription.trim())))
-        || (!activeId && storageIssue === null && !draftOwned.current ? requests[0] : undefined);
+        // With no browser storage, adopting a single server-authoritative
+        // operation is safe and is required for a cold page after a response
+        // loss. Never guess when more than one operation is available.
+        || (!activeId && !draftOwned.current && requests.length === 1 ? requests[0] : undefined);
       if (matching) {
         serverPending.current = matching;
         if (adopt || !draftOwned.current) applyServerRequest(matching);
@@ -467,6 +503,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
 
   function updateForm(patch: Partial<Form>) {
     markDraft();
+    pristineDraft.current = false;
     const next = { ...form, ...patch };
     setForm(next);
     const marker = currentMarker();
@@ -484,6 +521,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       ? { ...seed, request_id: requestId || crypto.randomUUID(), client_id: clientId || seed.client_id }
       : newForm(clientId, description);
     draftOwned.current = true;
+    pristineDraft.current = !seed || (!seed.client_id && !seed.title && seed.description === initialDescription && seed.category === 0);
     operation.current = null;
     serverPending.current = null;
     serverBlockedRef.current = false;
@@ -657,7 +695,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     event.preventDefault();
     event.stopPropagation();
     if (sending.current || modeRef.current !== 'draft' || created) return;
-    const blockedForForm = serverBlocked;
+    const blockedForForm = serverBlocked || distinctRequired;
     if (blockedForForm || serverDraftChoicesRef.current.length > 0 || pendingCheckFailed || !pendingChecked) {
       setError('L’état de cette demande ne peut pas être vérifié de façon sûre. Vérifiez votre connexion avant de créer un ticket.');
       return;
@@ -890,6 +928,13 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       serverPending.current = null;
       currentCreated.current = null;
       draftOwned.current = false;
+      // Consumption closes the old draft identity in the UI as well as on
+      // the server. A subsequent "Nouveau ticket" must start from a clean
+      // form; keeping the consumed UUID in formRequestIdRef would otherwise
+      // prevent refreshPending from adopting a different still-recoverable
+      // operation and could make the consumed result appear to return.
+      setForm(blankForm(initialDescription));
+      setCategories([]);
       setCreated(null);
       setUncertain(false);
       setDistinctRequired(false);
@@ -908,7 +953,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     }
   }
 
-  const blockedForForm = serverBlocked || (pendingCheckFailed && mode !== 'draft') || (!pendingChecked && mode !== 'draft');
+  const blockedForForm = serverBlocked || distinctRequired || (pendingCheckFailed && mode !== 'draft') || (!pendingChecked && mode !== 'draft');
   return <>
     <button type="button" className="text-button" disabled={disabled} onClick={() => void openNew()}><Plus size={15} />Nouveau ticket GLPI</button>
     <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value); }}>

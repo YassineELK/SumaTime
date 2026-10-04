@@ -192,7 +192,8 @@ export type GlpiDistinctCapability = GlpiDistinctIntent;
 export type GlpiDistinctBeginResult = GlpiDistinctCapability & {
   draft_request_id?: string;
   generation?: number;
-  state?: 'active' | 'reserved' | 'completed' | 'uncertain';
+  state?: 'active' | 'reserved' | 'completed' | 'uncertain' | 'rejected';
+  terminal_error?: string;
   operation?: GlpiCreationOperation;
 };
 export type GlpiDistinctDraft = {
@@ -202,6 +203,8 @@ export type GlpiDistinctDraft = {
   createdAt: string;
   generation: number;
   payload: GlpiCreateInput;
+  state?: 'active' | 'reserved' | 'completed' | 'uncertain' | 'rejected';
+  terminal_error?: string;
   operation?: GlpiCreationOperation;
 };
 export const GLPI_CREATION_RESULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -294,26 +297,52 @@ function markIntentUsed(db: ReturnType<typeof sqlite>, intent: DistinctIntentRow
   if (!result.changes) throw new AuthError('Cette intention de nouvelle demande a déjà été consommée.', 409, { code: 'INTENT_CONSUMED', terminal: true, retryable: false, preserveOperation: false });
 }
 
-function draftIntentForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, requestId: string) {
-  // Only the one currently active generation is authoritative.  In
-  // particular, an abandoned/superseded row can never win a tie on a
-  // timestamp or a random UUID sort order.
+function draftIntentRows(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, requestId: string) {
   return db.prepare(`SELECT ${intentColumns}
     FROM glpi_creation_intents
     WHERE member_id=? AND api_url=? AND draft_request_id=?
-      AND abandoned_at IS NULL AND used_at IS NULL
-    ORDER BY generation DESC LIMIT 1`).get(member, apiUrl, requestId) as DistinctIntentRow | undefined;
+    ORDER BY generation DESC,created_at DESC,intent_id DESC`).all(member, apiUrl, requestId) as DistinctIntentRow[];
 }
 
-function requireBoundIntentIfMissing(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, requestId: string) {
-  const intent = draftIntentForRequest(db, member, apiUrl, requestId);
-  if (!intent) return intent;
-  if (intent.used_at) {
-    if (intent.operation_request_id) return intent;
-    throw new AuthError('Cette intention consommée ne possède plus de réservation durable. Aucun nouveau ticket ne sera envoyé.', 409, { code: 'INTENT_CONSUMED', terminal: true, retryable: false, preserveOperation: false });
+function draftIdentityForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, requestId: string) {
+  // Identity and active-generation selection are deliberately separate. A
+  // tombstone must remain visible to the replay guard even after a newer
+  // generation is issued; filtering it out here would let a stale UUID fall
+  // through to fingerprint aliasing.
+  return draftIntentRows(db, member, apiUrl, requestId)[0];
+}
+
+function draftIntentForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, requestId: string) {
+  // Only the currently active generation is eligible to authorize a new
+  // reservation. The all-generations identity is checked separately by
+  // requireBoundIntentIfMissing so abandoned/consumed tombstones cannot be
+  // hidden by this presentation filter.
+  return draftIntentRows(db, member, apiUrl, requestId).find(row => !row.abandoned_at && !row.used_at);
+}
+
+function requireBoundIntentIfMissing(
+  db: ReturnType<typeof sqlite>,
+  member: string,
+  apiUrl: string,
+  requestId: string,
+  identity: DistinctIntentRow | undefined,
+  byRequest: CreationRow | undefined,
+  alias: AliasRow | undefined,
+) {
+  if (!identity) return identity;
+  if (identity.abandoned_at) throw new AuthError('L’intention de nouvelle demande a été abandonnée explicitement. Renouvelez-la explicitement.', 409, { code: 'INTENT_ABANDONED', terminal: true, retryable: false, preserveOperation: false });
+  if (identity.used_at) {
+    // A consumed identity is replayable only through the exact durable
+    // reservation it consumed. It must never become an ordinary request or
+    // alias to an older fingerprint winner when the reservation is absent.
+    const exactReservation = identity.operation_request_id && (
+      byRequest?.request_id === identity.operation_request_id
+      || alias?.operation_request_id === identity.operation_request_id
+    );
+    if (exactReservation) return identity;
+    throw new AuthError('Cette intention de nouvelle demande a déjà été consommée et ne possède aucune nouvelle réservation autorisée.', 409, { code: 'INTENT_CONSUMED', terminal: true, retryable: false, preserveOperation: false });
   }
-  if (intent.abandoned_at) throw new AuthError('L’intention de nouvelle demande a été abandonnée explicitement. Renouvelez-la explicitement.', 409, { code: 'INTENT_ABANDONED', terminal: true, retryable: false, preserveOperation: false });
-  if (Date.parse(intent.expires_at) <= now()) throw new AuthError('Cette intention de nouvelle demande a expiré. Renouvelez explicitement cette intention avant de créer le ticket.', 409, { code: 'INTENT_EXPIRED', retryable: false, preserveOperation: true });
+  if (Date.parse(identity.expires_at) <= now()) throw new AuthError('Cette intention de nouvelle demande a expiré. Renouvelez explicitement cette intention avant de créer le ticket.', 409, { code: 'INTENT_EXPIRED', retryable: false, preserveOperation: true });
   throw new AuthError('Cette demande distincte doit conserver son intention serveur. Renouvelez explicitement cette intention avant de créer le ticket.', 409, { code: 'INTENT_REQUIRED', retryable: false, preserveOperation: true });
 }
 
@@ -326,13 +355,18 @@ function intentIdFromInput(value: unknown) {
 }
 
 function distinctDraftsForMember(db: ReturnType<typeof sqlite>, member: string, apiUrl: string | undefined, includeAcknowledged: boolean): GlpiDistinctDraft[] {
+  void includeAcknowledged;
   if (!apiUrl) return [];
   const rows = db.prepare(`SELECT ${intentColumns}
     FROM glpi_creation_intents
     WHERE member_id=? AND api_url=? AND draft_request_id IS NOT NULL AND draft_payload_json IS NOT NULL
-    ORDER BY draft_request_id,generation DESC`).all(member, apiUrl) as DistinctIntentRow[];
+    ORDER BY draft_request_id,generation DESC,created_at DESC,intent_id DESC`).all(member, apiUrl) as DistinctIntentRow[];
+  // Only the newest generation is a visible draft. Older generations are
+  // audit tombstones and must not resurrect a consumed or expired result.
+  const latestByDraft = new Map<string, DistinctIntentRow>();
+  for (const intent of rows) if (intent.draft_request_id && !latestByDraft.has(intent.draft_request_id)) latestByDraft.set(intent.draft_request_id, intent);
   const drafts = new Map<string, GlpiDistinctDraft>();
-  for (const intent of rows) {
+  for (const intent of latestByDraft.values()) {
     if (!intent.draft_request_id || intent.abandoned_at) continue;
     let payload: GlpiCreateInput;
     try { payload = createInput(JSON.parse(intent.draft_payload_json || 'null')); }
@@ -345,15 +379,28 @@ function distinctDraftsForMember(db: ReturnType<typeof sqlite>, member: string, 
       if (operationRow?.payload_json) {
         try { operation = operationFromRow(operationRow); } catch { operation = undefined; }
       }
-      if (operationRow?.acknowledged_at && !includeAcknowledged) continue;
+      // An explicitly consumed result is no longer a draft. It remains in
+      // glpi_creations for permanent identity/replay guards and is exposed
+      // through `recoverable` only when that separate recovery projection is
+      // requested. It must never reappear in distinctDrafts.
+      if (operationRow?.acknowledged_at) continue;
     }
-    const current = drafts.get(intent.draft_request_id);
-    // A used/bound operation is authoritative over any stale unused row that
-    // may exist in a pre-index database. Otherwise only the active generation
-    // is returned. Never surface an abandoned/superseded capability.
-    if (current && (current.operation || !operation)) continue;
-    if (!operation && (intent.used_at || intent.abandoned_at)) continue;
+    if (!operation && intent.used_at) continue;
     const source = operation?.payload || payload;
+    const state = operationRow?.state === 'rejected'
+      ? 'rejected' as const
+      : operation?.ticket
+        ? 'completed' as const
+        : operationRow?.state === 'uncertain'
+          ? 'uncertain' as const
+          : operationRow?.state === 'completed'
+            ? 'completed' as const
+            : operationRow?.state === 'abandoned' || operationRow?.state === 'superseded'
+              ? undefined
+              : operationRow
+                ? 'reserved' as const
+                : 'active' as const;
+    if (!state) continue;
     drafts.set(intent.draft_request_id, {
       draft_request_id: intent.draft_request_id,
       intent_id: intent.intent_id,
@@ -361,6 +408,8 @@ function distinctDraftsForMember(db: ReturnType<typeof sqlite>, member: string, 
       createdAt: intent.created_at,
       generation: Number.isSafeInteger(intent.generation) ? intent.generation : 0,
       payload: source,
+      state,
+      ...(state === 'rejected' && operationRow?.terminal_error ? { terminal_error: operationRow.terminal_error } : {}),
       ...(operation ? { operation } : {}),
     });
   }
@@ -513,6 +562,16 @@ export function beginGlpiDistinctCreation(member: string, config: Config, scopeR
         ? rowForRequest(db, member, config.api, alias.operation_request_id)
         : rowForRequest(db, member, config.api, scopeRequestId);
       if (!scoped) throw new AuthError('La demande d’origine de cette nouvelle intention est inconnue.', 409);
+      // A terminal operation may be corrected only through a new explicit
+      // intent. Keep the old UUID as an immutable audit tombstone, but retire
+      // its draft projection once that new intent is issued; otherwise the
+      // rejected draft would keep winning cold-page selection forever and
+      // hide the corrected operation/result. `used_at` remains untouched, so
+      // replaying the old UUID is still permanently fail-closed.
+      if (scoped.state === 'rejected') {
+        db.prepare(`UPDATE glpi_creation_intents SET abandoned_at=COALESCE(abandoned_at,?)
+          WHERE member_id=? AND api_url=? AND operation_request_id=?`).run(nowIso(), member, config.api, scoped.request_id);
+      }
     }
 
     const suppliedPayload = rawDraftPayload === undefined ? undefined : createInput(rawDraftPayload);
@@ -539,13 +598,22 @@ export function beginGlpiDistinctCreation(member: string, config: Config, scopeR
         const operationRow = rowForRequest(db, member, config.api, bound.operation_request_id);
         if (operationRow?.payload_json) {
           const operation = operationFromRow(operationRow);
-          const state = operation.ticket ? 'completed' : operationRow.state === 'uncertain' ? 'uncertain' : 'reserved';
+          const state = operation.ticket
+            ? 'completed'
+            : operationRow.state === 'rejected'
+              ? 'rejected'
+              : operationRow.state === 'uncertain'
+                ? 'uncertain'
+                : operationRow.state === 'completed'
+                  ? 'completed'
+                  : 'reserved';
           return {
             intent_id: bound.intent_id,
             expiresAt: bound.expires_at,
             draft_request_id: draftRequestId,
             generation: bound.generation,
             state,
+            ...(state === 'rejected' && operationRow.terminal_error ? { terminal_error: operationRow.terminal_error } : {}),
             operation,
           };
         }
@@ -657,19 +725,20 @@ export async function createGlpiTicket(member:string,config:Config,rawInput:unkn
    // an expired or missing capability must never fall through to an older
    // operation with identical business fields.
    const boundIntent = draftIntentForRequest(db, member, config.api, input.request_id);
+   const identity = draftIdentityForRequest(db, member, config.api, input.request_id);
    if (boundIntent && distinctIntentId && boundIntent.intent_id !== distinctIntentId) {
      throw new AuthError('Cette intention de nouvelle demande est liée à un autre brouillon ou a été renouvelée.', 409, { code: 'INTENT_REQUEST_MISMATCH', retryable: false, preserveOperation: true });
    }
-   if (!distinctIntentId) requireBoundIntentIfMissing(db, member, config.api, input.request_id);
-   const verifiedIntent = distinctIntentId
-     ? verifyIntent(db, member, config.api, distinctIntentId, input.request_id, fingerprint)
-     : undefined;
    const alias = aliasForRequest(db, member, config.api, input.request_id);
    if (alias && (alias.member_id !== member || alias.api_url !== config.api || alias.payload_hash !== fingerprint)) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.', 409);
    const globalByRequest = db.prepare(`SELECT member_id,api_url,payload_hash FROM glpi_creations WHERE request_id=?`).get(input.request_id) as { member_id: string; api_url: string; payload_hash: string } | undefined;
    if (globalByRequest && (globalByRequest.member_id !== member || globalByRequest.api_url !== config.api || globalByRequest.payload_hash !== fingerprint)) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.',409);
    const byRequest = rowForRequest(db, member, config.api, input.request_id);
    if (byRequest && byRequest.payload_hash !== fingerprint) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.', 409);
+   if (!distinctIntentId) requireBoundIntentIfMissing(db, member, config.api, input.request_id, identity, byRequest, alias);
+   const verifiedIntent = distinctIntentId
+     ? verifyIntent(db, member, config.api, distinctIntentId, input.request_id, fingerprint)
+     : undefined;
    if (alias) {
      const aliased = rowForRequest(db, member, config.api, alias.operation_request_id);
      if (!aliased?.payload_json || aliased.payload_hash !== fingerprint) throw new AuthError('Cette identité GLPI est connue mais son opération associée est absente ou incohérente. Aucun nouveau ticket ne sera envoyé.', 409);

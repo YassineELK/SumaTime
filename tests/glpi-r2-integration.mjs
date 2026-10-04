@@ -202,6 +202,14 @@ async function waitFor(predicate, timeout = 6000) {
   }
   throw new Error(`UI condition timed out: ${document.body.textContent}`);
 }
+async function waitForFormReady(form) {
+  await waitFor(() => {
+    const current = form.isConnected ? form : [...document.querySelectorAll('form.quick-form')].at(-1);
+    const submit = current?.querySelector('button.primary');
+    const fieldset = current?.querySelector('fieldset');
+    return !!current && !!submit && !submit.disabled && !fieldset?.disabled;
+  });
+}
 async function renderTicket(root, memberId, clients, initialClient = '') {
   await act(async () => {
     root.render(React.createElement(NewGlpiTicket, { clients, memberId, initialClient, onCreated: () => { createdCallbacks += 1; } }));
@@ -233,7 +241,7 @@ async function submitTicket(container, client, title, description) {
   setField(form, 'select', client.id);
   setField(form, 'input[maxlength="250"]', title);
   setField(form, 'textarea', description);
-  await settle(500);
+  await waitForFormReady(form);
   resetCreateRateLimit(rateLimitMemberId);
   await act(async () => { form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(650); });
 }
@@ -296,14 +304,27 @@ async function main() {
   setField(distinctForm, 'select', client.id);
   setField(distinctForm, 'input[maxlength="250"]', 'ROUND6 DISTINCT INTENT');
   setField(distinctForm, 'textarea', 'The same payload is a new incident only after the explicit action.');
-  await settle(500);
+  await waitForFormReady(distinctForm);
   resetCreateRateLimit(rateLimitMemberId);
   await act(async () => { distinctForm.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(700); });
   equal(ticketCalls().length, distinctBefore + 2, 'the server-authorized identical payload creates exactly one second mock Ticket');
   await consumeTicket();
+  const ordinaryStillPending = await api('alice', null, '/api/glpi?uncertain=1');
+  equal(ordinaryStillPending.requests?.length, 1, 'the first ordinary operation remains the only server-recoverable result');
   await openFresh(mounted.container);
-  await waitFor(() => /ROUND6 DISTINCT INTENT/.test(document.body.textContent));
+  // The first, ordinary operation from this fixture is still legitimately
+  // recoverable. Wait for that server-authoritative result, consume it, then
+  // open a second fresh draft. The distinct operation just ACKed must never
+  // be presented.
+  await waitFor(() => /Ticket créé dans GLPI|Résultat récupéré/.test(document.body.textContent));
   await consumeTicket();
+  await openFresh(mounted.container);
+  await waitFor(() => !!document.querySelector('form.quick-form'));
+  const cleanAfterAck = document.querySelector('form.quick-form');
+  assert.ok(cleanAfterAck, 'New ticket opens a clean form after the distinct result was consumed');
+  equal(cleanAfterAck.querySelector('input[maxlength="250"]')?.value || '', '', 'the consumed distinct title is not redisplayed');
+  equal(cleanAfterAck.querySelector('textarea')?.value || '', '', 'the consumed distinct description is not redisplayed');
+  assert.equal(button(document, 'Utiliser ce ticket'), undefined, 'a consumed distinct result is not offered again');
   const distinctAfterAck = await api('alice', null, '/api/glpi?uncertain=1');
   equal(distinctAfterAck.requests, [], 'both distinct-intent tickets are explicitly ACKed before the next scenario');
   await unmountTicket(mounted);
@@ -373,16 +394,24 @@ async function main() {
   uiCreateBodies.length = 0;
   const rejectionBefore = ticketCalls().length;
   mounted = await mountTicket(alice.id, users.clients);
-  await openFresh(mounted.container);
+  // Establish a completed operation first, then authorize the rejection as
+  // an actual distinct request. This keeps the integration aligned with the
+  // terminal-distinct projection contract instead of testing an ordinary
+  // form rejection as if it carried a capability.
+  await submitTicket(mounted.container, client, 'ROUND12 REJECTION BASELINE', 'A baseline operation scopes the terminal distinct rejection.');
+  const baselineDistinct = button(document, 'Commencer une nouvelle demande distincte');
+  ok(baselineDistinct, 'a completed operation exposes the distinct transition for the rejection fixture');
+  await act(async () => { baselineDistinct.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); await wait(700); });
   let rejectionForm = document.querySelector('form.quick-form');
   assert.ok(rejectionForm);
+  await waitForFormReady(rejectionForm);
   setField(rejectionForm, 'select', client.id);
   setField(rejectionForm, 'input[maxlength="250"]', 'REJECT-CREATE');
   setField(rejectionForm, 'textarea', 'A certain provider rejection must not be retried with its tombstoned UUID.');
   await settle(500);
   resetCreateRateLimit(rateLimitMemberId);
   await act(async () => { rejectionForm.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(700); });
-  equal(ticketCalls().length, rejectionBefore + 1, 'the certain rejection reaches the mock provider exactly once');
+  equal(ticketCalls().length, rejectionBefore + 2, 'the baseline and certain distinct rejection reach the mock provider exactly once each');
   ok(!/Résultat incertain/.test(document.body.textContent), 'a certain rejection is not presented as uncertain');
   const rejectedBody = { ...uiCreateBodies.at(-1) };
   const rejectionDb = new DatabaseSync(databasePath);
@@ -392,7 +421,24 @@ async function main() {
   const closeRejected = button(document, 'Fermer');
   ok(closeRejected, 'the rejected draft remains closable');
   await act(async () => { closeRejected.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); await wait(80); });
+  // A cold page must project the durable terminal rejection as rejected, not
+  // as an uncertain/reserved operation. Re-enter through a new React root so
+  // no component memory can hide a server projection defect.
+  await unmountTicket(mounted);
+  mounted = await mountTicket(alice.id, users.clients);
   await openFresh(mounted.container);
+  await waitFor(() => /Création refusée|GLPI a refusé|Plusieurs brouillons distincts/.test(document.body.textContent));
+  if (/Plusieurs brouillons distincts/.test(document.body.textContent)) {
+    const rejectedChoice = button(document, 'REJECT-CREATE');
+    ok(rejectedChoice, 'cold page exposes the rejected draft among explicit server choices');
+    await act(async () => { rejectedChoice.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); await wait(100); });
+  }
+  await waitFor(() => /Création refusée|GLPI a refusé/.test(document.body.textContent));
+  ok(!/Résultat incertain/.test(document.body.textContent), 'cold remount keeps certain rejection terminal');
+  const coldRejectedDistinct = button(document, 'Commencer une nouvelle demande distincte');
+  ok(coldRejectedDistinct, 'cold rejected state requires explicit new intent');
+  await act(async () => { coldRejectedDistinct.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); await wait(700); });
+  await waitFor(() => !!document.querySelector('form.quick-form'));
   rejectionForm = document.querySelector('form.quick-form');
   assert.ok(rejectionForm);
   setField(rejectionForm, 'input[maxlength="250"]', 'ROUND7 REJECT CORRECTED');
@@ -401,7 +447,12 @@ async function main() {
   await act(async () => { rejectionForm.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(700); });
   const correctedBody = { ...uiCreateBodies.at(-1) };
   ok(correctedBody.request_id !== rejectedBody.request_id, 'correction automatically starts a fresh operation UUID');
-  equal(ticketCalls().length, rejectionBefore + 2, 'the corrected payload emits one accepted provider Ticket POST');
+  equal(ticketCalls().length, rejectionBefore + 3, 'the corrected payload emits one accepted provider Ticket POST');
+  await consumeTicket();
+  // The baseline remains recoverable while the rejected distinct UUID is
+  // being corrected. Consume it explicitly before the next crash scenarios.
+  await openFresh(mounted.container);
+  await waitFor(() => /Ticket créé dans GLPI|Résultat récupéré/.test(document.body.textContent));
   await consumeTicket();
   await unmountTicket(mounted);
 
