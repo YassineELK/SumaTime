@@ -726,6 +726,10 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     event.preventDefault();
     event.stopPropagation();
     if (sending.current || modeRef.current !== 'draft' || created) return;
+    if (!validRequestId(form.request_id)) {
+      setError(BROWSER_UUID_UNAVAILABLE_MESSAGE);
+      return;
+    }
     const blockedForForm = serverBlocked || distinctRequired;
     if (blockedForForm || serverDraftChoicesRef.current.length > 0 || pendingCheckFailed || !pendingChecked) {
       setError('L’état de cette demande ne peut pas être vérifié de façon sûre. Vérifiez votre connexion avant de créer un ticket.');
@@ -1024,7 +1028,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
             <label>Urgence<select value={form.urgency} onChange={event => updateForm({ urgency: Number(event.target.value) })}>{['Très basse', 'Basse', 'Moyenne', 'Haute', 'Très haute'].map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label>
           </fieldset>
           <p className="form-note">Seuls les clients associés à une entité GLPI sont proposés. Les règles et champs obligatoires de GLPI restent applicables.</p>
-          <div className="quick-actions"><button type="button" className="secondary" disabled={busy} onClick={() => setOpen(false)}>Fermer</button><button className="primary" disabled={busy || loading || uncertain || blockedForForm || serverDraftChoices.length > 0 || !form.client_id}>{busy ? 'Création…' : 'Créer dans GLPI'}</button></div>
+          <div className="quick-actions"><button type="button" className="secondary" disabled={busy} onClick={() => setOpen(false)}>Fermer</button><button className="primary" disabled={busy || loading || uncertain || blockedForForm || serverDraftChoices.length > 0 || !form.client_id || !validRequestId(form.request_id)}>{busy ? 'Création…' : 'Créer dans GLPI'}</button></div>
         </form>}
       </DialogContent>
     </Dialog>
