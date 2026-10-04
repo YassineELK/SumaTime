@@ -7,6 +7,7 @@ import type { Client } from '@/lib/types';
 import type { GlpiCreationOperation, GlpiDistinctDraft, GlpiTicket } from '@/lib/glpi';
 import { isTerminalGlpiFailure } from '@/lib/glpi-contract';
 import { announcePendingGlpiRequest, getGlpiDraftStorageStatus, isGlpiCreationAcknowledged, markGlpiCreationAcknowledged, readPendingGlpiRequest, removePendingGlpiRequest, savePendingGlpiRequest, subscribePendingGlpiRequest, type GlpiDistinctCapability, type GlpiDraftStorageStatus, type GlpiRequestPayload, type PendingGlpiRequest } from '@/lib/glpi-draft';
+import { browserUuidV4, BROWSER_UUID_UNAVAILABLE_MESSAGE } from '@/lib/browser-uuid';
 
 type Status = { configured: boolean; connected: boolean; canCreate: boolean; web: string | null };
 type Category = { id: number; name: string };
@@ -19,7 +20,7 @@ type UiMode = 'idle' | 'draft' | 'uncertain' | 'result';
 type RecoveryAction = 'reauth' | 'retry' | null;
 
 function newForm(clientId: string, description: string): Form {
-  return { request_id: crypto.randomUUID(), client_id: clientId, title: '', description, type: 1, urgency: 3, category: 0 };
+  return { request_id: browserUuidV4(), client_id: clientId, title: '', description, type: 1, urgency: 3, category: 0 };
 }
 
 function blankForm(description: string): Form {
@@ -545,7 +546,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
 
   function enterDraft(clientId: string, description: string, seed?: Form, distinct?: GlpiDistinctCapability, requestId?: string): Form {
     const next = seed
-      ? { ...seed, request_id: requestId || crypto.randomUUID(), client_id: clientId || seed.client_id }
+      ? { ...seed, request_id: requestId || browserUuidV4(), client_id: clientId || seed.client_id }
       : newForm(clientId, description);
     draftOwned.current = true;
     pristineDraft.current = !seed || (!seed.client_id && !seed.title && seed.description === initialDescription && seed.category === 0);
@@ -600,7 +601,8 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     if (found || operation.current || serverBlockedRef.current || serverDraftChoicesRef.current.length > 0 || serverRecoveryChoicesRef.current.length > 0) return;
     const clientId = clients.some(client => client.id === initialClient && client.active && client.glpi_entity_id !== null) ? initialClient : '';
     clearDistinctCapability();
-    enterDraft(clientId, initialDescription);
+    try { enterDraft(clientId, initialDescription); }
+    catch { setError(BROWSER_UUID_UNAVAILABLE_MESSAGE); }
   }
 
   async function authorizeDistinctRequest() {
@@ -613,7 +615,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       // UUID, so it cannot ever replay that operation's result.
       const draftRequestId = !operation.current && marker && validRequestId(form.request_id)
         ? form.request_id
-        : crypto.randomUUID();
+        : browserUuidV4();
       const draftPayload = canonical({ ...form, request_id: draftRequestId });
       const response = await fetch('/api/glpi', {
         method: 'POST',
@@ -825,8 +827,13 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
         setDistinctRequired(distinctConflict);
         // A certain rejection is a terminal tombstone for this UUID. Keep the
         // business fields visible, but make the next attempt a new operation.
-        setForm({ ...payload, request_id: crypto.randomUUID() });
-        setError(reason instanceof Error ? reason.message : 'Création refusée. Corrigez le formulaire puis réessayez.');
+        try {
+          setForm({ ...payload, request_id: browserUuidV4() });
+          setError(reason instanceof Error ? reason.message : 'Création refusée. Corrigez le formulaire puis réessayez.');
+        } catch {
+          setForm({ ...payload, request_id: '' });
+          setError(BROWSER_UUID_UNAVAILABLE_MESSAGE);
+        }
       }
     } finally {
       if (request.valid()) {
@@ -849,6 +856,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     let responseStatus: number | null = null;
     let distinctRenewalRequired = false;
     let intentExpired = false;
+    let uuidRenewalFailed = false;
     const activeCapability = currentCapability();
     try {
       const response = await fetch('/api/glpi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, action: 'createTicket', ...(distinctIntent.current ? { distinct_intent: distinctIntent.current } : {}) }), signal: request.controller.signal });
@@ -910,7 +918,14 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
           operation.current = null;
           uncertainPayload.current = null;
           serverPending.current = null;
-          enterDraft(fresh.client_id, '', fresh);
+          try { enterDraft(fresh.client_id, '', fresh); }
+          catch {
+            uuidRenewalFailed = true;
+            draftOwned.current = true;
+            setForm({ ...fresh, request_id: '' });
+            setUncertain(false);
+            setMode('draft');
+          }
           setRecoveryAction(null);
         } else {
           // A recovery transport/auth/rate-limit/infra failure says nothing
@@ -925,7 +940,9 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
           setMode('uncertain');
           setRecoveryAction(responseStatus === 401 || responseStatus === 403 ? 'reauth' : 'retry');
         }
-        setError(reason instanceof Error ? reason.message : 'Le résultat reste incertain. Vérifiez vos tickets dans GLPI.');
+        setError(uuidRenewalFailed
+          ? BROWSER_UUID_UNAVAILABLE_MESSAGE
+          : reason instanceof Error ? reason.message : 'Le résultat reste incertain. Vérifiez vos tickets dans GLPI.');
       }
     } finally {
       if (request.valid()) {

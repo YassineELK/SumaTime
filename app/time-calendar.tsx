@@ -10,6 +10,7 @@ import { billedMinutes, brusselsToday, clockTime, duration, parseTime, validDate
 import { addDays, findCalendarFocus, layoutEntries, overlaps, restoreEntryPayload, selectedRange, slotAt, SLOT_COUNT, SLOT_HEIGHT, type CalendarFocusTarget } from '@/lib/calendar';
 import { weekStart } from '@/lib/calendar';
 import type { Entry, State } from '@/lib/types';
+import { browserUuidV4, BROWSER_UUID_UNAVAILABLE_MESSAGE } from '@/lib/browser-uuid';
 
 type Selection = { date: string; first: number; last: number; mode: 'mouse' | 'touch' | 'keyboard' };
 type Draft = { id: string; version?: number; client_id: string; ticket: string; date: string; start: string; end: string; description: string; on_site: boolean | null; member_id: string; member: string; billed: number };
@@ -115,7 +116,10 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
   function openRange(date: string, first: number, last: number) {
     if (loading || loadError || date > today) return;
     const { start, end } = selectedRange(first, last);
-    showDraft({ id: crypto.randomUUID(), client_id: data.clients.find(c => c.active)?.id || '', ticket: '', date, start: clockTime(start), end: end === 1440 ? '00:00' : clockTime(end), description: '', on_site: false, member_id: me.id, member: me.name, billed: 0 });
+    let id: string;
+    try { id = browserUuidV4(); }
+    catch { setOperationError(true); setNotice(BROWSER_UUID_UNAVAILABLE_MESSAGE); return; }
+    showDraft({ id, client_id: data.clients.find(c => c.active)?.id || '', ticket: '', date, start: clockTime(start), end: end === 1440 ? '00:00' : clockTime(end), description: '', on_site: false, member_id: me.id, member: me.name, billed: 0 });
   }
   function openEntry(entry: Entry) {
     showDraft({ id: entry.id, version: entry.version, client_id: entry.client_id, ticket: entry.ticket, date: entry.date, start: clockTime(entry.start), end: entry.end === 1440 ? '00:00' : clockTime(entry.end), description: entry.description, on_site: entry.on_site === null ? null : !!entry.on_site, member_id: entry.member_id, member: entry.member, billed: entry.billed });

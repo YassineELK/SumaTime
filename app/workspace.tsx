@@ -19,6 +19,7 @@ import AccountPanel, { Logout } from './account-panel';
 import TeamPanel from './team-panel';
 import { ClientRates } from './billing-settings';
 import { euro, serviceAmount } from '@/lib/pricing';
+import { browserUuidV4, BROWSER_UUID_UNAVAILABLE_MESSAGE } from '@/lib/browser-uuid';
 
 type Filters = { from: string; to: string; client: string; member: string; status: string; q: string };
 type EntryForm = { id: string; version?: number; client_id: string; ticket: string; date: string; start: string; end: string; description: string; on_site: boolean | null };
@@ -166,7 +167,11 @@ export default function Workspace() {
   }
   async function saveEntry(event: FormEvent) {
     event.preventDefault();
-    const id = form.id || crypto.randomUUID();
+    let id = form.id;
+    if (!id) {
+      try { id = browserUuidV4(); }
+      catch { setError(BROWSER_UUID_UNAVAILABLE_MESSAGE); return; }
+    }
     setForm(prev => ({ ...prev, id }));
     const saved = await act({ ...form, id, action: 'saveEntry' }, form.version ? 'Prestation mise à jour.' : 'Prestation enregistrée.');
     if (saved) {

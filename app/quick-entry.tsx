@@ -7,6 +7,7 @@ import TimeInput from '@/components/time-input';
 import LocationField from '@/components/location-field';
 import { brusselsToday, duration } from '@/lib/business';
 import { suggestedTimes } from '@/lib/workday';
+import { browserUuidV4, BROWSER_UUID_UNAVAILABLE_MESSAGE } from '@/lib/browser-uuid';
 import type { EntrySeed, State } from '@/lib/types';
 export const draftKey = (id: string) => 'sumatoni-quick-draft-v2:' + id;
 type Draft = Required<EntrySeed> & { id: string };
@@ -14,9 +15,18 @@ export function readDraft(id: string): Draft | null {
   try { const d = JSON.parse(localStorage.getItem(draftKey(id)) || 'null'); return d && ['id','client_id','ticket','description','date','start','end'].every(k => typeof d[k] === 'string') && typeof d.on_site === 'boolean' ? d : null; } catch { return null; }
 }
 export default function QuickEntry({ data, seed, mode, onClose, onSaved }: { data: State; seed: EntrySeed | null; mode: 'entry' | 'timer'; onClose: () => void; onSaved: (message: string) => void }) {
-  const [form, setForm] = useState<Draft>(() => (seed === null && mode === 'entry' ? readDraft(data.me!.id) : null) || { id: crypto.randomUUID(), ...suggestedTimes(), client_id: '', ticket: '', description: '', on_site: false, ...seed });
+  const [initial] = useState(() => {
+    const restored = seed === null && mode === 'entry' ? readDraft(data.me!.id) : null;
+    if (restored) return { form: restored, uuidError: '' };
+    try {
+      return { form: { id: browserUuidV4(), ...suggestedTimes(), client_id: '', ticket: '', description: '', on_site: false, ...seed } as Draft, uuidError: '' };
+    } catch {
+      return { form: { id: '', ...suggestedTimes(), client_id: '', ticket: '', description: '', on_site: false, ...seed } as Draft, uuidError: BROWSER_UUID_UNAVAILABLE_MESSAGE };
+    }
+  });
+  const [form, setForm] = useState<Draft>(initial.form);
   const [restored] = useState(seed === null && mode === 'entry' && !!readDraft(data.me!.id));
-  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [storageError, setStorageError] = useState(false);
+  const [busy, setBusy] = useState(false), [error, setError] = useState(initial.uuidError), [storageError, setStorageError] = useState(false);
   const [discard, setDiscard] = useState(false);
   const [dirty, setDirty] = useState(restored || !!seed?.ticket);
   const minutes = (v: string) => /^\d\d:\d\d$/.test(v) ? Number(v.slice(0,2)) * 60 + Number(v.slice(3)) : NaN;
@@ -24,7 +34,9 @@ export default function QuickEntry({ data, seed, mode, onClose, onSaved }: { dat
   useEffect(() => { if (mode !== 'entry' || !dirty) return; try { localStorage.setItem(draftKey(data.me!.id), JSON.stringify(form)); } catch { queueMicrotask(() => setStorageError(true)); } }, [form, dirty, mode, data.me]);
   const update = (patch: Partial<Draft>) => { setDirty(true); setForm(value => ({ ...value, ...patch })); };
   async function save(event: FormEvent) {
-    event.preventDefault(); if (busy) return; setBusy(true); setError('');
+    event.preventDefault(); if (busy) return;
+    if (!form.id) { setError(BROWSER_UUID_UNAVAILABLE_MESSAGE); return; }
+    setBusy(true); setError('');
     try {
       const response = await fetch(mode === 'timer' ? '/api/workday' : '/api/time', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, action: mode === 'timer' ? 'start' : 'saveEntry' }) });
       const result = await response.json() as { error?: string }; if (!response.ok) throw new Error(result.error || 'Enregistrement impossible.');
