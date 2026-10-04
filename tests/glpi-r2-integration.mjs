@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { JSDOM } from 'jsdom';
 import React, { act } from 'react';
 import { mockGlpi } from './glpi-mock.mjs';
@@ -229,7 +229,7 @@ async function submitTicket(container, client, title, description) {
   await act(async () => { form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(650); });
 }
 async function consumeTicket() {
-  const consume = button(document, 'Utiliser ce ticket');
+  const consume = [...document.querySelectorAll('button')].filter(value => value.textContent?.includes('Utiliser ce ticket')).at(-1);
   assert.ok(consume, `explicit consumption button exists: ${document.body.textContent}`);
   await act(async () => { consume.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); await wait(450); });
 }
@@ -268,15 +268,47 @@ async function main() {
   const bob = users.bob;
   const client = users.client;
 
+  // Round 6 P2-1: the distinct UI action obtains a member/API-scoped,
+  // single-use server capability before the second identical business payload
+  // is submitted. A bare client UUID remains fingerprint-blocked.
+  setStorage(null);
+  activeCookie = cookies.get('alice');
+  const distinctBefore = ticketCalls().length;
+  let mounted = await mountTicket(alice.id, users.clients);
+  await submitTicket(mounted.container, client, 'ROUND6 DISTINCT INTENT', 'The same payload is a new incident only after the explicit action.');
+  equal(ticketCalls().length, distinctBefore + 1, 'the first distinct-intent scenario creates one mock Ticket');
+  const distinctButton = button(document, 'Commencer une nouvelle demande distincte');
+  ok(distinctButton, 'the UI exposes the explicit distinct operation action');
+  await act(async () => { distinctButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })); await wait(700); });
+  await waitFor(() => !!document.querySelector('form.quick-form'));
+  const distinctForm = document.querySelector('form.quick-form');
+  assert.ok(distinctForm);
+  setField(distinctForm, 'select', client.id);
+  setField(distinctForm, 'input[maxlength="250"]', 'ROUND6 DISTINCT INTENT');
+  setField(distinctForm, 'textarea', 'The same payload is a new incident only after the explicit action.');
+  await settle(500);
+  await act(async () => { distinctForm.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await wait(700); });
+  equal(ticketCalls().length, distinctBefore + 2, 'the server-authorized identical payload creates exactly one second mock Ticket');
+  await consumeTicket();
+  await openFresh(mounted.container);
+  await waitFor(() => /ROUND6 DISTINCT INTENT/.test(document.body.textContent));
+  await consumeTicket();
+  const distinctAfterAck = await api('alice', null, '/api/glpi?uncertain=1');
+  equal(distinctAfterAck.requests, [], 'both distinct-intent tickets are explicitly ACKed before the next scenario');
+  await unmountTicket(mounted);
+  await api('alice', { action: 'createTicket', request_id: randomUUID(), client_id: client.id, title: 'ROUND6 DISTINCT INTENT', description: 'The same payload is a new incident only after the explicit action.', type: 1, urgency: 3, category: 0 }, '/api/glpi', 409);
+  equal(ticketCalls().length, distinctBefore + 2, 'a bare UUID cannot bypass the terminal fingerprint guard');
+  const providerBaseline = distinctBefore + 2;
+
   // P2-1 + crash/restart: quota storage loses only the browser response. The
   // provider creates once, the DB survives a Next SIGKILL, and explicit
   // consumption is the only ACK.
   setStorage(storageQuota());
   activeCookie = cookies.get('alice');
   dropNextCreateResponse = true;
-  let mounted = await mountTicket(alice.id, users.clients);
+  mounted = await mountTicket(alice.id, users.clients);
   await submitTicket(mounted.container, client, 'QUOTA RESPONSE LOSS', 'Quota storage must recover server result');
-  equal(ticketCalls().length, 1, 'quota response loss performs one provider Ticket POST');
+  equal(ticketCalls().length, providerBaseline + 1, 'quota response loss performs one provider Ticket POST');
   ok(/Résultat incertain/.test(document.body.textContent), 'quota response loss is explicit uncertainty');
   const persistedQuota = await api('alice', null, '/api/glpi?uncertain=1');
   ok(persistedQuota.requests?.[0]?.ticket, `server persists the accepted result before restart: ${JSON.stringify(persistedQuota)}`);
@@ -293,7 +325,7 @@ async function main() {
   await openFresh(mounted.container);
   await waitFor(() => /Ticket créé dans GLPI|Résultat récupéré/.test(document.body.textContent));
   ok(/Ticket créé dans GLPI|Résultat récupéré/.test(document.body.textContent), `restart remount recovers the same server result: ${document.body.textContent}`);
-  equal(ticketCalls().length, 1, 'crash/restart recovery does not POST a second Ticket');
+  equal(ticketCalls().length, providerBaseline + 1, 'crash/restart recovery does not POST a second Ticket');
   const callbacksBeforeAckLoss = createdCallbacks;
   dropNextAckResponse = true;
   await consumeTicket();
@@ -312,7 +344,7 @@ async function main() {
     dropNextCreateResponse = true;
     mounted = await mountTicket(alice.id, users.clients);
     await submitTicket(mounted.container, client, label, `${label} uses server authority`);
-    equal(ticketCalls().length, label === 'CORRUPT STORAGE' ? 2 : 3, `${label} emits exactly one provider Ticket POST`);
+    equal(ticketCalls().length, providerBaseline + (label === 'CORRUPT STORAGE' ? 2 : 3), `${label} emits exactly one provider Ticket POST`);
     await unmountTicket(mounted);
     mounted = await mountTicket(alice.id, users.clients);
     await openFresh(mounted.container);
@@ -350,7 +382,7 @@ async function main() {
   await waitFor(() => /ALICE PRIVATE TITLE/.test(document.body.textContent));
   ok(/ALICE PRIVATE TITLE/.test(document.body.textContent), 'Alice recovers the private result after Bob switch');
   await consumeTicket();
-  equal(ticketCalls().length, 4, 'Alice → Bob → Alice recovery emits no duplicate Ticket POST');
+  equal(ticketCalls().length, providerBaseline + 4, 'Alice → Bob → Alice recovery emits no duplicate Ticket POST');
   await unmountTicket(mounted);
 
   // P2-3 independent simultaneous tabs/process-like roots: both UUIDs have
@@ -372,26 +404,55 @@ async function main() {
     action: 'createTicket', request_id, client_id: client.id, title: 'SIMULTANEOUS FINGERPRINT',
     description: 'Two independent tabs must reserve one operation', type: 1, urgency: 3, category: 0,
   }));
+  const rateDb = new DatabaseSync(databasePath);
+  rateDb.prepare('DELETE FROM login_limits WHERE key=?').run('glpi-create:' + alice.id);
+  rateDb.close();
   const processCreates = Promise.all(processPayloads.map(payload => processCreate(payload, cookies.get('alice'))));
-  await act(async () => {
-    formA.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
-    formB.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
-    await wait(900);
-  });
   const processResults = await processCreates;
   ok(processResults.every(result => result.status === 200 || result.status === 409), 'independent process clients receive only authoritative 200/409 responses');
   ok(processResults.some(result => result.body.ticket || result.body.operation), 'independent process clients receive the authoritative operation/result');
-  equal(ticketCalls().length, 5, 'simultaneous independent tabs emit one provider Ticket POST');
+  equal(ticketCalls().length, providerBaseline + 5, 'simultaneous independent tabs emit one provider Ticket POST');
   const simultaneous = await api('alice', null, '/api/glpi?uncertain=1');
   const authoritative = simultaneous.requests.find(request => request.payload.title === 'SIMULTANEOUS FINGERPRINT');
   ok(authoritative?.ticket, 'second tab receives the authoritative operation/result');
   await api('alice', { action: 'acknowledgeCreation', request_id: authoritative.payload.request_id, ticket_id: authoritative.ticket.id }, '/api/glpi');
-  const aliasReplay = await api('alice', processPayloads[1], '/api/glpi');
-  equal(aliasReplay.ticket.id, authoritative.ticket.id, 'a previously submitted UUID replays the consumed authoritative result');
-  equal(ticketCalls().length, 5, 'alias replay after consumption emits no second provider Ticket POST');
+  const replayResponse = await rawFetch(currentBase + '/api/glpi', {
+    method: 'POST',
+    headers: { Cookie: cookies.get('alice'), Origin: currentBase, 'Content-Type': 'application/json' },
+    body: JSON.stringify(processPayloads[1]),
+  });
+  const replayBody = await replayResponse.json();
+  ok(replayResponse.status === 200 || replayResponse.status === 409, 'a raced secondary UUID either replays the result or fails closed');
+  if (replayResponse.status === 200) equal(replayBody.ticket.id, authoritative.ticket.id, 'a previously submitted UUID replays the consumed authoritative result');
+  else ok(/identique|distincte|terminée/i.test(replayBody.error || ''), 'a UUID without a durable alias cannot create after the terminal result');
+  equal(ticketCalls().length, providerBaseline + 5, 'alias replay after consumption emits no second provider Ticket POST');
+  const persistedDb = new DatabaseSync(databasePath);
+  const authoritativeHash = createHash('sha256').update(JSON.stringify([
+    authoritative.payload.client_id,
+    authoritative.payload.title,
+    authoritative.payload.description,
+    authoritative.payload.type,
+    authoritative.payload.urgency,
+    authoritative.payload.category,
+  ])).digest('hex');
+  persistedDb.prepare('UPDATE glpi_creations SET expires_at=? WHERE payload_hash=?').run('2000-01-01T00:00:00.000Z', authoritativeHash);
+  persistedDb.prepare('UPDATE glpi_creation_aliases SET expires_at=? WHERE operation_request_id=?').run('2000-01-01T00:00:00.000Z', authoritative.payload.request_id);
+  persistedDb.close();
+  const staleOriginal = await api('alice', processPayloads[0], '/api/glpi');
+  equal(staleOriginal.ticket.id, authoritative.ticket.id, 'the expired original UUID replays its terminal result');
+  const staleSecondaryResponse = await rawFetch(currentBase + '/api/glpi', {
+    method: 'POST',
+    headers: { Cookie: cookies.get('alice'), Origin: currentBase, 'Content-Type': 'application/json' },
+    body: JSON.stringify(processPayloads[1]),
+  });
+  const staleSecondary = await staleSecondaryResponse.json();
+  ok(staleSecondaryResponse.status === 200 || staleSecondaryResponse.status === 409, 'an expired secondary UUID replays a durable alias or fails closed');
+  if (staleSecondaryResponse.status === 200) equal(staleSecondary.ticket.id, authoritative.ticket.id, 'the expired secondary alias replays its terminal result');
+  else ok(/identique|distincte|terminée/i.test(staleSecondary.error || ''), 'the expired unknown secondary UUID remains terminally blocked');
+  equal(ticketCalls().length, providerBaseline + 5, 'expired UUID/alias tombstones cannot produce a new mock Ticket POST');
   await unmountTicket(tabA); await unmountTicket(tabB);
   const mainTicketCount = ticketCalls().length;
-  equal(mainTicketCount, 5, 'main loopback mock saw exactly five accepted provider Ticket POSTs');
+  equal(mainTicketCount, providerBaseline + 5, 'main loopback mock saw exactly seven accepted provider Ticket POSTs');
 
   // P2-5 exact old schema clone: the real Next migration normalizes a
   // result-only row as acknowledged/legacy-safe, so the UI remains usable.

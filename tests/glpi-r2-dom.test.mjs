@@ -32,6 +32,7 @@ globalThis.fetch = async (input, init = {}) => {
   if (url === '/api/glpi' && init.method === 'POST') {
     const body = JSON.parse(String(init.body));
     if (body.action === 'acknowledgeCreation') { acknowledgements += 1; if (dropNextAckResponse) { dropNextAckResponse = false; throw new TypeError('ACK response lost after server commit'); } return new Response(JSON.stringify({ ok: true }), { status: 200 }); }
+    if (body.action === 'beginDistinctCreation') return new Response(JSON.stringify({ intent_id: 'a'.repeat(64), expiresAt: new Date(Date.now() + 600000).toISOString() }), { status: 200 });
     assert.equal(body.action, 'createTicket');
     const value = { request_id: body.request_id, client_id: body.client_id, title: body.title, description: body.description, type: body.type, urgency: body.urgency, category: body.category };
     if (!accepted.length) {

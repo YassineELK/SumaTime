@@ -1,6 +1,6 @@
 import { getMember, checkOrigin, AuthError, rateLimit } from '@/lib/auth';
 import { sqlite } from '@/db/raw';
-import { acknowledgeGlpiCreationResult, createGlpiTicket, glpiCreationOptions, glpiWriteEnabled, GlpiCreationUncertain, glpiConfig, glpiUncertainRequests, hasGlpiToken, glpiTickets, resolveLegacyCreation, saveGlpiToken, testGlpiToken } from '@/lib/glpi';
+import { acknowledgeGlpiCreationResult, beginGlpiDistinctCreation, createGlpiTicket, glpiCreationOptions, glpiWriteEnabled, GlpiCreationUncertain, glpiConfig, glpiUncertainRequests, hasGlpiToken, glpiTickets, resolveLegacyCreation, saveGlpiToken, testGlpiToken } from '@/lib/glpi';
 export const dynamic = 'force-dynamic';
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
 async function who() { const me = await getMember(); if (!me) throw new AuthError('Reconnectez-vous.', 401); if (me.must_change) throw new AuthError('Changez votre mot de passe provisoire.', 403); return me; }
@@ -27,6 +27,12 @@ export async function POST(request: Request) {
     const raw = await request.text(); if (raw.length > 18000) throw new AuthError('Formulaire trop long.');
     let body; try { body = JSON.parse(raw); } catch { throw new AuthError('Formulaire invalide.'); }
     if (!body || typeof body !== 'object') throw new AuthError('Formulaire invalide.');
+    if (body.action === 'beginDistinctCreation' || body.action === 'authorizeDistinctCreation') {
+      const config = glpiConfig(); if (!config) throw new AuthError('GLPI doit être configuré.', 409);
+      if (body.previous_request_id !== undefined && (typeof body.previous_request_id !== 'string' || !/^[a-f0-9-]{36}$/.test(body.previous_request_id))) throw new AuthError('Demande d’origine invalide.');
+      rateLimit('glpi-distinct-intent:'+me.id,10,60000);
+      return json(beginGlpiDistinctCreation(me.id, config, body.previous_request_id));
+    }
     if (body.action === 'acknowledgeCreation') {
       if (typeof body.request_id !== 'string' || !/^[a-f0-9-]{36}$/.test(body.request_id)) throw new AuthError('Demande invalide.');
       const ticketId = Number.isSafeInteger(body.ticket_id) ? body.ticket_id as number : undefined;

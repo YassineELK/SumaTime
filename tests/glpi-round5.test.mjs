@@ -68,6 +68,8 @@ test('ACK is idempotent and canonical UUID aliases recover the consumed result',
   assert.equal(acknowledgeGlpiCreationResult('alias-member', api, payload.request_id, ticket.id).ok, true);
 
   const aliasPayload = { ...payload, request_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' };
+  db.prepare(`INSERT INTO glpi_creation_aliases(alias_request_id,operation_request_id,member_id,api_url,payload_hash,result_json,created_at,expires_at)
+    VALUES (?,?,?,?,?,?,?,?)`).run(aliasPayload.request_id, payload.request_id, 'alias-member', api, fingerprint, JSON.stringify(ticket), '2026-10-03T00:00:00.000Z', '2026-10-04T00:00:00.000Z');
   const replay = await createGlpiTicket('alias-member', { api, web: 'http://127.0.0.1:8790', appToken: '' }, aliasPayload);
   assert.equal(replay.ticket.id, ticket.id);
   assert.equal(replay.operation.payload.request_id, payload.request_id);
@@ -76,4 +78,8 @@ test('ACK is idempotent and canonical UUID aliases recover the consumed result',
   assert.equal(JSON.parse(alias.result_json).id, ticket.id);
   assert.ok(alias.expires_at);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM glpi_creations WHERE member_id=?').get('alias-member').n, 1);
+  await assert.rejects(
+    createGlpiTicket('alias-member', { api, web: 'http://127.0.0.1:8790', appToken: '' }, { ...payload, request_id: 'cccccccc-cccc-cccc-cccc-cccccccccccc' }),
+    error => error.status === 409 && /identique|distincte/i.test(error.message),
+  );
 });

@@ -4,6 +4,13 @@ import { dirname, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 const globalDb = globalThis as unknown as { timeDatabase?: DatabaseSync };
+const GLPI_CREATION_RESULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function resultExpiry(createdAt: string) {
+  const timestamp = Date.parse(createdAt);
+  return Number.isFinite(timestamp) ? new Date(timestamp + GLPI_CREATION_RESULT_TTL_MS).toISOString() : null;
+}
+
 export const dataPath = () => resolve(process.env.DATABASE_PATH || 'data/timesheet.sqlite');
 export function sqlite() {
   if (globalDb.timeDatabase) return globalDb.timeDatabase;
@@ -37,7 +44,18 @@ export function sqlite() {
   db.exec(`CREATE TABLE IF NOT EXISTS glpi_creations (
     request_id TEXT PRIMARY KEY, member_id TEXT NOT NULL REFERENCES members(id), api_url TEXT NOT NULL,
     payload_hash TEXT NOT NULL, payload_json TEXT, result_json TEXT, acknowledged_at TEXT,
-    expires_at TEXT, legacy_state TEXT, created_at TEXT NOT NULL);`);
+    expires_at TEXT, legacy_state TEXT, state TEXT NOT NULL DEFAULT 'active', terminal_error TEXT,
+    distinct_intent_id TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS glpi_creation_intents (
+      intent_id TEXT PRIMARY KEY,
+      member_id TEXT NOT NULL REFERENCES members(id), api_url TEXT NOT NULL,
+      scope_request_id TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+      used_at TEXT, used_request_id TEXT, used_payload_hash TEXT, operation_request_id TEXT
+    );
+    CREATE INDEX IF NOT EXISTS glpi_creation_intents_member
+      ON glpi_creation_intents(member_id,api_url,created_at);
+    CREATE INDEX IF NOT EXISTS glpi_creation_intents_request
+      ON glpi_creation_intents(used_request_id);`);
   // The alias table is the durable bridge between browser-generated UUIDs and
   // the one server-authoritative operation reserved by the canonical payload.
   // It intentionally keeps the result snapshot as well as the operation FK:
@@ -59,6 +77,7 @@ export function sqlite() {
   // member-scoped blocker until the user verifies GLPI and abandons it or
   // supplies proof that lets us recover it.
   const creationColumns = db.prepare('PRAGMA table_info(glpi_creations)').all() as { name: string }[];
+  const stateColumnMissing = !creationColumns.some(column => column.name === 'state');
   db.exec('BEGIN IMMEDIATE');
   try {
     if (!creationColumns.some(column => column.name === 'payload_json')) {
@@ -73,6 +92,15 @@ export function sqlite() {
     if (!creationColumns.some(column => column.name === 'legacy_state')) {
       db.exec('ALTER TABLE glpi_creations ADD COLUMN legacy_state TEXT');
     }
+    if (!creationColumns.some(column => column.name === 'state')) {
+      db.exec("ALTER TABLE glpi_creations ADD COLUMN state TEXT NOT NULL DEFAULT 'active'");
+    }
+    if (!creationColumns.some(column => column.name === 'terminal_error')) {
+      db.exec('ALTER TABLE glpi_creations ADD COLUMN terminal_error TEXT');
+    }
+    if (!creationColumns.some(column => column.name === 'distinct_intent_id')) {
+      db.exec('ALTER TABLE glpi_creations ADD COLUMN distinct_intent_id TEXT');
+    }
     // Rows from the old schema that have no payload and no result represent an
     // unresolved provider attempt.  Clear any acknowledgement a previous
     // buggy migration may have written, and keep them blocking forever until a
@@ -83,6 +111,18 @@ export function sqlite() {
       WHEN legacy_state IS NULL THEN 'active'
       ELSE legacy_state END
       WHERE legacy_state IS NULL OR legacy_state=''`);
+    db.exec(`UPDATE glpi_creations SET state=CASE
+      WHEN legacy_state='abandoned' THEN 'abandoned'
+      WHEN legacy_state='superseded' THEN 'superseded'
+      WHEN result_json IS NOT NULL THEN 'completed'
+      WHEN payload_json IS NULL AND result_json IS NULL THEN 'legacy_pending'
+      ELSE 'active' END
+      WHERE ${stateColumnMissing ? '1=1' : "state IS NULL OR state=''"}`);
+    // Fresh rows inserted by an older process may have received the new
+    // column's DEFAULT ('active') while already carrying a provider result.
+    // Result presence is terminal evidence and must outrank that default.
+    db.exec(`UPDATE glpi_creations SET state='completed',legacy_state='completed'
+      WHERE result_json IS NOT NULL AND state IN ('active','uncertain')`);
     db.exec(`UPDATE glpi_creations
       SET legacy_state='pending', acknowledged_at=NULL, expires_at=NULL
       WHERE payload_json IS NULL AND result_json IS NULL AND COALESCE(legacy_state,'pending')<>'abandoned'`);
@@ -93,9 +133,20 @@ export function sqlite() {
     db.exec(`UPDATE glpi_creations
       SET legacy_state='completed', acknowledged_at=COALESCE(acknowledged_at,created_at)
       WHERE payload_json IS NULL AND result_json IS NOT NULL AND COALESCE(legacy_state,'completed')<>'abandoned'`);
-    db.exec(`UPDATE glpi_creations
-      SET expires_at=COALESCE(expires_at,datetime(COALESCE(acknowledged_at,created_at), '+30 days'))
-      WHERE acknowledged_at IS NOT NULL AND result_json IS NOT NULL`);
+    // Keep the retention timestamp in canonical ISO form. SQLite's datetime()
+    // returns a space-separated value without milliseconds; lexical comparison
+    // with an ISO `T` timestamp can therefore expire a row before its 30-day
+    // boundary. Expiry is metadata only: identity rows are never deleted.
+    const expiryRows = db.prepare(`SELECT request_id,acknowledged_at,created_at,expires_at
+      FROM glpi_creations
+      WHERE acknowledged_at IS NOT NULL AND result_json IS NOT NULL`).all() as { request_id: string; acknowledged_at: string | null; created_at: string; expires_at: string | null }[];
+    for (const row of expiryRows) {
+      const expiresAt = resultExpiry(row.acknowledged_at || row.created_at);
+      // Preserve an intentionally accelerated ISO expiry used by an operator
+      // or a test; only repair the old SQLite `YYYY-MM-DD HH:MM:SS` precision
+      // loss (and missing values).
+      if (expiresAt && (!row.expires_at || !row.expires_at.includes('T'))) db.prepare('UPDATE glpi_creations SET expires_at=? WHERE request_id=?').run(expiresAt, row.request_id);
+    }
 
     // Every payload-bearing operation, including an already acknowledged one,
     // gets a self-alias.  This backfills the relation for databases upgraded
@@ -104,31 +155,46 @@ export function sqlite() {
       (alias_request_id,operation_request_id,member_id,api_url,payload_hash,result_json,created_at,expires_at)
       SELECT request_id,request_id,member_id,api_url,payload_hash,result_json,created_at,expires_at
       FROM glpi_creations WHERE payload_json IS NOT NULL`);
+    // A previous migration could have redirected a UUID that already had its
+    // own confirmed provider result to another fingerprint winner. A terminal
+    // operation is never an alias of a different terminal ticket: restore its
+    // self-mapping before normalizing live reservations.
+    db.exec(`UPDATE glpi_creation_aliases
+      SET operation_request_id=alias_request_id,
+          result_json=(SELECT result_json FROM glpi_creations WHERE request_id=alias_request_id),
+          expires_at=(SELECT expires_at FROM glpi_creations WHERE request_id=alias_request_id)
+      WHERE alias_request_id IN (
+        SELECT request_id FROM glpi_creations
+        WHERE payload_json IS NOT NULL AND result_json IS NOT NULL
+          AND state IN ('completed','acknowledged')
+      )`);
 
     // Older builds had no fingerprint uniqueness.  Keep the oldest
     // authoritative row for each still-live operation and make any duplicate
     // rows legacy-safe before installing the database-enforced reservation.
     const duplicates = db.prepare(`SELECT member_id,api_url,payload_hash
       FROM glpi_creations
-      WHERE payload_json IS NOT NULL AND acknowledged_at IS NULL
+      WHERE payload_json IS NOT NULL AND result_json IS NULL
+        AND state IN ('active','uncertain') AND distinct_intent_id IS NULL
       GROUP BY member_id,api_url,payload_hash HAVING COUNT(*) > 1`).all() as { member_id: string; api_url: string; payload_hash: string }[];
     for (const duplicate of duplicates) {
       const rows = db.prepare(`SELECT request_id,result_json,created_at
         FROM glpi_creations
-        WHERE member_id=? AND api_url=? AND payload_hash=? AND payload_json IS NOT NULL AND acknowledged_at IS NULL
-        ORDER BY CASE WHEN result_json IS NULL THEN 1 ELSE 0 END,created_at,request_id`).all(duplicate.member_id, duplicate.api_url, duplicate.payload_hash) as { request_id: string; result_json: string | null; created_at: string }[];
+        WHERE member_id=? AND api_url=? AND payload_hash=? AND payload_json IS NOT NULL
+          AND result_json IS NULL AND state IN ('active','uncertain') AND distinct_intent_id IS NULL
+        ORDER BY created_at,request_id`).all(duplicate.member_id, duplicate.api_url, duplicate.payload_hash) as { request_id: string; result_json: string | null; created_at: string }[];
       const winner = rows[0];
       if (!winner) continue;
       for (const loser of rows.slice(1)) {
-        if (!winner.result_json && loser.result_json) {
-          db.prepare('UPDATE glpi_creations SET result_json=? WHERE request_id=?').run(loser.result_json, winner.request_id);
-          winner.result_json = loser.result_json;
-        }
+        // A still-live duplicate can be represented as an alias, but terminal
+        // results are deliberately excluded from this migration. Their UUIDs
+        // and provider tickets are independent historical facts.
         db.prepare(`UPDATE glpi_creation_aliases
-          SET operation_request_id=?, result_json=?, expires_at=(SELECT expires_at FROM glpi_creations WHERE request_id=?)
-          WHERE alias_request_id=?`).run(winner.request_id, winner.result_json, winner.request_id, loser.request_id);
-        db.prepare(`UPDATE glpi_creations SET acknowledged_at=COALESCE(acknowledged_at,created_at),
-          expires_at=CASE WHEN result_json IS NOT NULL THEN COALESCE(expires_at,datetime(COALESCE(acknowledged_at,created_at), '+30 days')) ELSE NULL END
+          SET operation_request_id=?, result_json=(SELECT result_json FROM glpi_creations WHERE request_id=?),
+              expires_at=(SELECT expires_at FROM glpi_creations WHERE request_id=?)
+          WHERE alias_request_id=?`).run(winner.request_id, winner.request_id, winner.request_id, loser.request_id);
+        db.prepare(`UPDATE glpi_creations SET state='superseded',legacy_state='superseded',
+          terminal_error='Cette opération a été rattachée à une réservation identique antérieure.'
           WHERE request_id=?`).run(loser.request_id);
       }
     }
@@ -137,15 +203,14 @@ export function sqlite() {
     db.exec(`UPDATE glpi_creation_aliases
       SET result_json=(SELECT result_json FROM glpi_creations WHERE request_id=operation_request_id),
           expires_at=(SELECT expires_at FROM glpi_creations WHERE request_id=operation_request_id)`);
+    db.exec('DROP INDEX IF EXISTS glpi_creations_live_fingerprint_unique');
     db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS glpi_creations_live_fingerprint_unique
       ON glpi_creations(member_id,api_url,payload_hash)
-      WHERE acknowledged_at IS NULL AND payload_json IS NOT NULL`);
-    // Cleanup is intentionally fail-closed: only acknowledged rows with a
-    // validated result and an explicit expiry are eligible.  Uncertain and
-    // result-less legacy rows are never silently purged.
-    db.prepare(`DELETE FROM glpi_creations
-      WHERE payload_json IS NOT NULL AND acknowledged_at IS NOT NULL AND result_json IS NOT NULL
-        AND expires_at IS NOT NULL AND expires_at<=?`).run(new Date().toISOString());
+      WHERE payload_json IS NOT NULL AND result_json IS NULL
+        AND state IN ('active','uncertain') AND distinct_intent_id IS NULL`);
+    // Tombstones are permanent. A cleanup pass may hide old results from a
+    // convenience list, but it must never erase a UUID or alias that could be
+    // replayed after a crash, a stale tab, or a delayed response.
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');

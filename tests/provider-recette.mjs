@@ -107,7 +107,8 @@ const opts=await call(alice,null,'/api/glpi?createOptions=1&client='+client.id);
 await call(alice,{action:'connect',token:'entity-false-test-token'},'/api/glpi');
 const entityFalseRequestId=randomUUID();
 await call(alice,{...creation,request_id:entityFalseRequestId,title:'ENTITY-CONTEXT-FALSE'},'/api/glpi',502);
-equal(db.prepare('SELECT COUNT(*) AS n FROM glpi_creations WHERE request_id=?').get(entityFalseRequestId).n,0);
+equal(db.prepare('SELECT COUNT(*) AS n FROM glpi_creations WHERE request_id=?').get(entityFalseRequestId).n,1);
+equal(db.prepare('SELECT state FROM glpi_creations WHERE request_id=?').get(entityFalseRequestId).state,'rejected');
 for (const token of ['entity-http-error-test-token', 'entity-malformed-test-token']) {
   await call(alice,{action:'connect',token},'/api/glpi');
   await call(alice,null,'/api/glpi?createOptions=1&client='+client.id,502);
@@ -122,7 +123,8 @@ const madeAck=await call(alice,{action:'acknowledgeCreation',request_id:creation
 equal((await call(alice,null,'/api/glpi?uncertain=1')).requests.some(request=>request.payload.request_id===creation.request_id),false);
 await call(alice,{...creation,title:'Changed payload'},'/api/glpi',409);
 const rejected={...creation,request_id:randomUUID(),title:'REJECT-CREATE'};await call(alice,rejected,'/api/glpi',422);
-equal(db.prepare('SELECT COUNT(*) AS n FROM glpi_creations WHERE request_id=?').get(rejected.request_id).n,0);
+equal(db.prepare('SELECT COUNT(*) AS n FROM glpi_creations WHERE request_id=?').get(rejected.request_id).n,1);
+equal(db.prepare('SELECT state FROM glpi_creations WHERE request_id=?').get(rejected.request_id).state,'rejected');
 const uncertain={...creation,request_id:randomUUID(),title:'UNCERTAIN-CREATE'};
 equal((await call(alice,uncertain,'/api/glpi',409)).uncertain,true);
 equal((await call(alice,uncertain,'/api/glpi',409)).uncertain,true);

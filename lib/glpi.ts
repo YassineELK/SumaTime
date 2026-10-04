@@ -119,7 +119,9 @@ export type GlpiCreationOperation = { payload: GlpiCreateInput; createdAt: strin
 export type GlpiUncertainRequest = GlpiCreationOperation;
 export type GlpiCreateResult = { ticket: GlpiTicket; operation: GlpiCreationOperation };
 export type GlpiLegacyRequest = { request_id: string; createdAt: string; apiUrl: string };
+export type GlpiDistinctIntent = { intent_id: string; expiresAt: string };
 export const GLPI_CREATION_RESULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const GLPI_DISTINCT_INTENT_TTL_MS = 10 * 60 * 1000;
 export class GlpiCreationUncertain extends AuthError {
   constructor(public readonly operation?: GlpiCreationOperation) { super('La création est en cours ou son résultat est incertain. Vérifiez vos tickets dans GLPI avant toute nouvelle demande ; cette demande ne sera pas renvoyée automatiquement.', 409); }
 }
@@ -139,9 +141,10 @@ function storedTicket(value: unknown): GlpiTicket {
 function creationFingerprint(input: GlpiCreateInput) {
   return createHash('sha256').update(JSON.stringify([input.client_id, input.title, input.description, input.type, input.urgency, input.category])).digest('hex');
 }
-type CreationRow = { request_id: string; member_id: string; api_url: string; payload_hash: string; payload_json: string | null; result_json: string | null; acknowledged_at: string | null; expires_at: string | null; legacy_state: string | null; created_at: string };
+type CreationRow = { request_id: string; member_id: string; api_url: string; payload_hash: string; payload_json: string | null; result_json: string | null; acknowledged_at: string | null; expires_at: string | null; legacy_state: string | null; state: string | null; terminal_error: string | null; distinct_intent_id: string | null; created_at: string };
 type AliasRow = { alias_request_id: string; operation_request_id: string; member_id: string; api_url: string; payload_hash: string; result_json: string | null; created_at: string; expires_at: string | null };
-const creationColumns = 'request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,expires_at,legacy_state,created_at';
+type DistinctIntentRow = { intent_id: string; member_id: string; api_url: string; scope_request_id: string | null; created_at: string; expires_at: string; used_at: string | null; used_request_id: string | null; used_payload_hash: string | null; operation_request_id: string | null };
+const creationColumns = 'request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,expires_at,legacy_state,state,terminal_error,distinct_intent_id,created_at';
 function operationFromRow(row: Pick<CreationRow, 'payload_json' | 'result_json' | 'created_at'>): GlpiCreationOperation {
   const parsed: unknown = row.payload_json ? JSON.parse(row.payload_json) : null;
   const ticket = row.result_json ? storedTicket(JSON.parse(row.result_json)) : undefined;
@@ -151,12 +154,10 @@ function resultExpiry(now = Date.now()) {
   return new Date(now + GLPI_CREATION_RESULT_TTL_MS).toISOString();
 }
 function cleanupCreationHistory(db: ReturnType<typeof sqlite>) {
-  // Only a confirmed result that the member explicitly ACKed can expire.  In
-  // particular, no result-less uncertainty (including a legacy row) is ever
-  // removed by retention housekeeping.
-  db.prepare(`DELETE FROM glpi_creations
-    WHERE payload_json IS NOT NULL AND acknowledged_at IS NOT NULL AND result_json IS NOT NULL
-      AND expires_at IS NOT NULL AND expires_at<=?`).run(new Date().toISOString());
+  // Retention is a presentation concern, never an identity concern. Keeping
+  // this hook explicit prevents a future cleanup job from deleting a UUID or
+  // alias that a stale browser may replay after the nominal result TTL.
+  void db;
 }
 function rowForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: string | undefined, requestId: string) {
   const row = (apiUrl
@@ -165,18 +166,59 @@ function rowForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: st
   return row;
 }
 function aliasForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: string | undefined, requestId: string) {
-  const row = (apiUrl
-    ? db.prepare('SELECT alias_request_id,operation_request_id,member_id,api_url,payload_hash,result_json,created_at,expires_at FROM glpi_creation_aliases WHERE alias_request_id=? AND member_id=? AND api_url=?').get(requestId, member, apiUrl)
-    : db.prepare('SELECT alias_request_id,operation_request_id,member_id,api_url,payload_hash,result_json,created_at,expires_at FROM glpi_creation_aliases WHERE alias_request_id=? AND member_id=?').get(requestId, member)) as AliasRow | undefined;
+  const row = db.prepare('SELECT alias_request_id,operation_request_id,member_id,api_url,payload_hash,result_json,created_at,expires_at FROM glpi_creation_aliases WHERE alias_request_id=?').get(requestId) as AliasRow | undefined;
+  if (row && (row.member_id !== member || (apiUrl !== undefined && row.api_url !== apiUrl))) return row;
   return row;
+}
+
+function operationError(row: CreationRow): never {
+  if (row.terminal_error) throw new AuthError(row.terminal_error, 409);
+  throw new AuthError('Cette opération GLPI est déjà terminée sans résultat récupérable. Ouvrez une nouvelle demande explicitement.', 409);
+}
+
+function verifyIntent(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, intentId: string, requestId: string, fingerprint: string) {
+  const intent = db.prepare(`SELECT intent_id,member_id,api_url,scope_request_id,created_at,expires_at,used_at,used_request_id,used_payload_hash,operation_request_id
+    FROM glpi_creation_intents WHERE intent_id=?`).get(intentId) as DistinctIntentRow | undefined;
+  if (!intent) throw new AuthError('L’intention de nouvelle demande est invalide ou inconnue.', 409);
+  if (intent.member_id !== member || intent.api_url !== apiUrl) throw new AuthError('L’intention de nouvelle demande ne correspond pas à votre session GLPI.', 403);
+  if (intent.used_at) {
+    if (intent.used_request_id === requestId && intent.used_payload_hash === fingerprint) return { intent, reused: true };
+    throw new AuthError('Cette intention de nouvelle demande a déjà été consommée.', 409);
+  }
+  if (Date.parse(intent.expires_at) <= Date.now()) throw new AuthError('L’intention de nouvelle demande a expiré. Recommencez explicitement.', 409);
+  return { intent, reused: false };
+}
+
+function markIntentUsed(db: ReturnType<typeof sqlite>, intent: DistinctIntentRow, requestId: string, fingerprint: string, operationId: string) {
+  if (intent.used_at) {
+    if (intent.used_request_id !== requestId || intent.used_payload_hash !== fingerprint || intent.operation_request_id !== operationId) throw new AuthError('Cette intention de nouvelle demande a déjà été consommée.', 409);
+    return;
+  }
+  const result = db.prepare(`UPDATE glpi_creation_intents
+    SET used_at=?,used_request_id=?,used_payload_hash=?,operation_request_id=?
+    WHERE intent_id=? AND used_at IS NULL`).run(new Date().toISOString(), requestId, fingerprint, operationId, intent.intent_id);
+  if (!result.changes) throw new AuthError('Cette intention de nouvelle demande a déjà été consommée.', 409);
+}
+
+function intentIdFromInput(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = (value as { distinct_intent?: unknown }).distinct_intent;
+  if (candidate === undefined) return undefined;
+  if (typeof candidate !== 'string' || !/^[a-f0-9]{64}$/.test(candidate)) throw new AuthError('L’intention de nouvelle demande est invalide.', 400);
+  return candidate;
 }
 export function glpiUncertainRequests(member: string, apiUrl?: string, includeAcknowledged = false) {
  const db=sqlite();
  cleanupCreationHistory(db);
-  const mismatched = apiUrl && db.prepare('SELECT 1 FROM glpi_creations WHERE member_id=? AND api_url<>? AND acknowledged_at IS NULL LIMIT 1').get(member, apiUrl);
+  const mismatched = apiUrl && db.prepare(`SELECT 1 FROM glpi_creations WHERE member_id=? AND api_url<>?
+    AND acknowledged_at IS NULL AND state IN ('active','uncertain','completed') LIMIT 1`).get(member, apiUrl);
   const rows = (apiUrl
-   ? db.prepare(`SELECT ${creationColumns} FROM glpi_creations WHERE member_id=? AND api_url=? AND acknowledged_at IS NULL ORDER BY created_at DESC LIMIT 20`).all(member, apiUrl)
-   : db.prepare(`SELECT ${creationColumns} FROM glpi_creations WHERE member_id=? AND acknowledged_at IS NULL ORDER BY created_at DESC LIMIT 20`).all(member)) as CreationRow[];
+   ? db.prepare(`SELECT ${creationColumns} FROM glpi_creations WHERE member_id=? AND api_url=?
+       AND acknowledged_at IS NULL AND state IN ('active','uncertain','completed')
+       ORDER BY created_at DESC LIMIT 20`).all(member, apiUrl)
+   : db.prepare(`SELECT ${creationColumns} FROM glpi_creations WHERE member_id=?
+       AND acknowledged_at IS NULL AND state IN ('active','uncertain','completed')
+       ORDER BY created_at DESC LIMIT 20`).all(member)) as CreationRow[];
   // Keep legacy blockers visible even when the configured GLPI URL changed;
   // otherwise the member would see a permanent block with no safe action.
   const legacyRows = db.prepare(`SELECT request_id,api_url,created_at FROM glpi_creations WHERE member_id=?
@@ -216,6 +258,7 @@ export function acknowledgeGlpiCreationResult(member: string, apiUrl: string | u
   return transaction(db => {
     cleanupCreationHistory(db);
     const alias = aliasForRequest(db, member, apiUrl, requestId);
+    if (alias && (alias.member_id !== member || (apiUrl !== undefined && alias.api_url !== apiUrl))) return { ok: false };
     const operationId = alias?.operation_request_id || requestId;
     const row = rowForRequest(db, member, apiUrl, operationId);
     if (!row?.result_json) return { ok: false };
@@ -227,7 +270,7 @@ export function acknowledgeGlpiCreationResult(member: string, apiUrl: string | u
     if (!row.acknowledged_at) {
       const acknowledgedAt = new Date().toISOString();
       const expiresAt = resultExpiry();
-      db.prepare('UPDATE glpi_creations SET acknowledged_at=?,expires_at=? WHERE request_id=? AND member_id=? AND api_url=? AND acknowledged_at IS NULL').run(acknowledgedAt, expiresAt, row.request_id, member, row.api_url);
+      db.prepare("UPDATE glpi_creations SET acknowledged_at=?,expires_at=?,state='acknowledged' WHERE request_id=? AND member_id=? AND api_url=? AND acknowledged_at IS NULL").run(acknowledgedAt, expiresAt, row.request_id, member, row.api_url);
       db.prepare('UPDATE glpi_creation_aliases SET result_json=?,expires_at=? WHERE operation_request_id=? AND member_id=? AND api_url=?').run(row.result_json, expiresAt, row.request_id, member, row.api_url);
     }
     return { ok: true, ticket };
@@ -243,7 +286,7 @@ export function resolveLegacyCreation(member: string, apiUrl: string | undefined
     if (!row || row.payload_json !== null || row.result_json !== null || row.acknowledged_at !== null || row.legacy_state !== 'pending') throw new AuthError('Cette opération historique n’est plus en attente de résolution.', 409);
     if (resolution === 'abandon') {
       const at = new Date().toISOString();
-      db.prepare("UPDATE glpi_creations SET legacy_state='abandoned',acknowledged_at=?,expires_at=NULL WHERE request_id=? AND member_id=?").run(at, row.request_id, member);
+      db.prepare("UPDATE glpi_creations SET legacy_state='abandoned',state='abandoned',acknowledged_at=?,expires_at=NULL WHERE request_id=? AND member_id=?").run(at, row.request_id, member);
       return { ok: true, resolution: 'abandoned' };
     }
     if (!rawPayload || !rawTicket) throw new AuthError('Fournissez le payload et le ticket vérifiés dans GLPI pour récupérer cette opération.', 400);
@@ -251,10 +294,12 @@ export function resolveLegacyCreation(member: string, apiUrl: string | undefined
     if (input.request_id !== row.request_id || creationFingerprint(input) !== row.payload_hash) throw new AuthError('La preuve fournie ne correspond pas à l’opération historique.', 409);
     const ticket = storedTicket(rawTicket);
     const resultJson = JSON.stringify(ticket);
-    db.prepare("UPDATE glpi_creations SET payload_json=?,result_json=?,legacy_state='recovered',acknowledged_at=NULL,expires_at=NULL WHERE request_id=? AND member_id=?").run(JSON.stringify(input), resultJson, row.request_id, member);
-    db.prepare(`INSERT OR REPLACE INTO glpi_creation_aliases
+    db.prepare("UPDATE glpi_creations SET payload_json=?,result_json=?,legacy_state='recovered',state='completed',acknowledged_at=NULL,expires_at=NULL WHERE request_id=? AND member_id=?").run(JSON.stringify(input), resultJson, row.request_id, member);
+    db.prepare(`INSERT OR IGNORE INTO glpi_creation_aliases
       (alias_request_id,operation_request_id,member_id,api_url,payload_hash,result_json,created_at,expires_at)
       VALUES (?,?,?,?,?,?,?,NULL)`).run(row.request_id, row.request_id, member, row.api_url, row.payload_hash, resultJson, row.created_at);
+    db.prepare(`UPDATE glpi_creation_aliases SET operation_request_id=?,result_json=?,expires_at=NULL
+      WHERE alias_request_id=? AND member_id=? AND api_url=?`).run(row.request_id, resultJson, row.request_id, member, row.api_url);
     return { ok: true, resolution: 'recovered', operation: { payload: input, createdAt: row.created_at, ticket } };
   });
 }
@@ -286,57 +331,101 @@ export async function glpiCreationOptions(member:string,config:Config,clientId:s
   };
  });
 }
+
+/**
+ * Issue a server-owned capability for the one UI action that intentionally
+ * starts a second operation with the same business fingerprint. The caller's
+ * session and configured GLPI URL are recorded in the database; the random
+ * value is not a client assertion and is consumed atomically by the first
+ * reservation that presents it.
+ */
+export function beginGlpiDistinctCreation(member: string, config: Config, scopeRequestId?: string): GlpiDistinctIntent {
+  return transaction(db => {
+    if (scopeRequestId) {
+      const alias = aliasForRequest(db, member, config.api, scopeRequestId);
+      const scoped = alias?.member_id === member && alias.api_url === config.api
+        ? rowForRequest(db, member, config.api, alias.operation_request_id)
+        : rowForRequest(db, member, config.api, scopeRequestId);
+      if (!scoped) throw new AuthError('La demande d’origine de cette nouvelle intention est inconnue.', 409);
+    }
+    const createdAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + GLPI_DISTINCT_INTENT_TTL_MS).toISOString();
+    let intentId = randomBytes(32).toString('hex');
+    while (db.prepare('SELECT 1 FROM glpi_creation_intents WHERE intent_id=?').get(intentId)) intentId = randomBytes(32).toString('hex');
+    db.prepare(`INSERT INTO glpi_creation_intents
+      (intent_id,member_id,api_url,scope_request_id,created_at,expires_at,used_at,used_request_id,used_payload_hash,operation_request_id)
+      VALUES (?,?,?,?,?,?,NULL,NULL,NULL,NULL)`).run(intentId, member, config.api, scopeRequestId || null, createdAt, expiresAt);
+    return { intent_id: intentId, expiresAt };
+  });
+}
+
 function linkCreationAlias(db: ReturnType<typeof sqlite>, input: GlpiCreateInput, operation: CreationRow) {
   const existing = db.prepare('SELECT operation_request_id,member_id,api_url,payload_hash FROM glpi_creation_aliases WHERE alias_request_id=?').get(input.request_id) as { operation_request_id: string; member_id: string; api_url: string; payload_hash: string } | undefined;
-  if (existing && (existing.member_id !== operation.member_id || existing.api_url !== operation.api_url || existing.payload_hash !== creationFingerprint(input))) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.', 409);
+  if (existing && (existing.member_id !== operation.member_id || existing.api_url !== operation.api_url || existing.payload_hash !== creationFingerprint(input) || existing.operation_request_id !== operation.request_id)) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.', 409);
+  if (existing) return;
   db.prepare(`INSERT OR IGNORE INTO glpi_creation_aliases
     (alias_request_id,operation_request_id,member_id,api_url,payload_hash,result_json,created_at,expires_at)
     VALUES (?,?,?,?,?,?,?,?)`).run(input.request_id, operation.request_id, operation.member_id, operation.api_url, operation.payload_hash, operation.result_json, operation.created_at, operation.expires_at);
-  // An alias may have been inserted while the provider response was still
-  // unknown. Keep its snapshot current whenever a later retry sees the row.
-  db.prepare(`UPDATE glpi_creation_aliases SET operation_request_id=?,result_json=?,expires_at=?
-    WHERE alias_request_id=? AND member_id=? AND api_url=?`).run(operation.request_id, operation.result_json, operation.expires_at, input.request_id, operation.member_id, operation.api_url);
 }
 function authoritativeCreation(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, fingerprint: string) {
   return db.prepare(`SELECT ${creationColumns} FROM glpi_creations
     WHERE member_id=? AND api_url=? AND payload_hash=? AND payload_json IS NOT NULL
-    ORDER BY CASE WHEN result_json IS NOT NULL THEN 0 WHEN acknowledged_at IS NULL THEN 1 ELSE 2 END,created_at,request_id LIMIT 1`).get(member, apiUrl, fingerprint) as CreationRow | undefined;
+      AND result_json IS NULL AND state IN ('active','uncertain')
+    ORDER BY CASE WHEN distinct_intent_id IS NULL THEN 0 ELSE 1 END,created_at,request_id LIMIT 1`).get(member, apiUrl, fingerprint) as CreationRow | undefined;
+}
+function terminalCreation(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, fingerprint: string) {
+  // A rejected reservation is still a permanent UUID tombstone, but it did
+  // not establish a provider ticket. It must not block a later, independently
+  // authorized attempt merely because its business fingerprint is identical.
+  return db.prepare(`SELECT ${creationColumns} FROM glpi_creations
+    WHERE member_id=? AND api_url=? AND payload_hash=? AND payload_json IS NOT NULL
+      AND result_json IS NOT NULL AND state IN ('completed','acknowledged')
+    ORDER BY created_at,request_id LIMIT 1`).get(member, apiUrl, fingerprint) as CreationRow | undefined;
 }
 export async function createGlpiTicket(member:string,config:Config,rawInput:unknown):Promise<GlpiCreateResult> {
  if(!glpiWriteEnabled())throw new AuthError('La création GLPI est désactivée dans cet environnement.',403);
  const input = createInput(rawInput);
+ const distinctIntentId = intentIdFromInput(rawInput);
  const fingerprint=creationFingerprint(input);
  const payloadJson=JSON.stringify(input);
  const reservation = transaction(db => {
    cleanupCreationHistory(db);
-   const legacy = db.prepare(`SELECT request_id FROM glpi_creations WHERE member_id=?
-     AND payload_json IS NULL AND result_json IS NULL AND acknowledged_at IS NULL
-     AND COALESCE(legacy_state,'pending')='pending' LIMIT 1`).get(member);
-   if (legacy) throw new AuthError('Une opération GLPI historique reste indécise. Vérifiez GLPI puis abandonnez-la explicitement ou récupérez-la avec une preuve avant toute nouvelle création.', 409);
    const alias = aliasForRequest(db, member, config.api, input.request_id);
-   if (alias && alias.payload_hash !== fingerprint) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.', 409);
+   if (alias && (alias.member_id !== member || alias.api_url !== config.api || alias.payload_hash !== fingerprint)) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.', 409);
    const globalByRequest = db.prepare(`SELECT member_id,api_url,payload_hash FROM glpi_creations WHERE request_id=?`).get(input.request_id) as { member_id: string; api_url: string; payload_hash: string } | undefined;
    if (globalByRequest && (globalByRequest.member_id !== member || globalByRequest.api_url !== config.api || globalByRequest.payload_hash !== fingerprint)) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.',409);
    const byRequest = rowForRequest(db, member, config.api, input.request_id);
    if (byRequest && byRequest.payload_hash !== fingerprint) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.', 409);
-   const existing = alias ? rowForRequest(db, member, config.api, alias.operation_request_id) : authoritativeCreation(db, member, config.api, fingerprint);
-   if (existing) {
-     if (!existing.payload_json) throw new AuthError('Cette demande ne peut pas être réconciliée. Résolvez l’opération historique explicitement.', 409);
-     linkCreationAlias(db, input, existing);
-     return { row: existing, reserved: false };
+   if (alias) {
+     const aliased = rowForRequest(db, member, config.api, alias.operation_request_id);
+     if (!aliased?.payload_json || aliased.payload_hash !== fingerprint) throw new AuthError('Cette identité GLPI est connue mais son opération associée est absente ou incohérente. Aucun nouveau ticket ne sera envoyé.', 409);
+     return { row: aliased, reserved: false };
    }
    if (byRequest) {
-     if (!byRequest.payload_json) throw new AuthError('Cette demande ne peut pas être réconciliée. Résolvez l’opération historique explicitement.', 409);
-     linkCreationAlias(db, input, byRequest);
      return { row: byRequest, reserved: false };
+   }
+   const legacy = db.prepare(`SELECT request_id FROM glpi_creations WHERE member_id=?
+     AND payload_json IS NULL AND result_json IS NULL AND acknowledged_at IS NULL
+     AND COALESCE(legacy_state,'pending')='pending' LIMIT 1`).get(member);
+   if (legacy) throw new AuthError('Une opération GLPI historique reste indécise. Vérifiez GLPI puis abandonnez-la explicitement ou récupérez-la avec une preuve avant toute nouvelle création.', 409);
+   const intent = distinctIntentId ? verifyIntent(db, member, config.api, distinctIntentId, input.request_id, fingerprint) : undefined;
+   if (intent?.reused) throw new AuthError('L’intention consommée ne possède plus de réservation durable. Aucun nouveau ticket ne sera envoyé.', 409);
+   if (!intent) {
+     const existing = authoritativeCreation(db, member, config.api, fingerprint);
+     if (existing) {
+       linkCreationAlias(db, input, existing);
+       return { row: existing, reserved: false };
+     }
+    if (terminalCreation(db, member, config.api, fingerprint)) throw new AuthError('Une demande identique est déjà terminée. Utilisez explicitement « Commencer une nouvelle demande distincte » pour autoriser un nouvel incident.', 409);
    }
    const createdAt = new Date().toISOString();
    const reserved = db.prepare(`INSERT OR IGNORE INTO glpi_creations
-     (request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,expires_at,legacy_state,created_at)
-     VALUES (?,?,?,?,?,NULL,NULL,NULL,'active',?)`).run(input.request_id, member, config.api, fingerprint, payloadJson, createdAt);
+     (request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,expires_at,legacy_state,state,terminal_error,distinct_intent_id,created_at)
+     VALUES (?,?,?,?,?,NULL,NULL,NULL,'active','active',NULL,?,?)`).run(input.request_id, member, config.api, fingerprint, payloadJson, distinctIntentId || null, createdAt);
    if (reserved.changes) {
      const row = db.prepare(`SELECT ${creationColumns} FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?`).get(input.request_id, member, config.api) as CreationRow | undefined;
      if (!row) throw new AuthError('La réservation GLPI n’a pas pu être conservée. Réessayez après vérification.', 503);
+     if (intent) markIntentUsed(db, intent.intent, input.request_id, fingerprint, row.request_id);
      linkCreationAlias(db, input, row);
      return { row, reserved: true };
    }
@@ -346,14 +435,20 @@ export async function createGlpiTicket(member:string,config:Config,rawInput:unkn
    return { row: winner, reserved: false };
  });
  if(!reservation.reserved){
+  if (!reservation.row.payload_json) throw new AuthError('Cette demande ne peut pas être réconciliée. Résolvez l’opération historique explicitement.', 409);
   const operation = operationFromRow(reservation.row);
   if(operation.ticket)return { ticket: operation.ticket, operation };
+  if (reservation.row.state === 'rejected' || reservation.row.state === 'superseded' || reservation.row.state === 'abandoned') operationError(reservation.row);
   throw new GlpiCreationUncertain(operation);
  }
  const db=sqlite();
  let client;
+ const markCreation = (state: 'rejected' | 'uncertain', error?: unknown) => transaction(database => {
+   const message = error instanceof Error ? error.message : null;
+   database.prepare('UPDATE glpi_creations SET state=?,legacy_state=?,terminal_error=? WHERE request_id=? AND member_id=? AND api_url=?').run(state, state, message, input.request_id, member, config.api);
+ });
  try { client = mappedClient(input.client_id); }
- catch (error) { transaction(database => { database.prepare('DELETE FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?').run(input.request_id,member,config.api); }); throw error; }
+ catch (error) { markCreation('rejected', error); throw error; }
  let sent=false;
  try{
   const ticket = await session(config,tokenFor(member,config),async(get,post)=>{
@@ -368,14 +463,15 @@ export async function createGlpiTicket(member:string,config:Config,rawInput:unkn
   });
   const operation = transaction(database => {
     const resultJson = JSON.stringify(ticket);
-    database.prepare('UPDATE glpi_creations SET result_json=? WHERE request_id=? AND member_id=? AND api_url=? AND acknowledged_at IS NULL').run(resultJson,input.request_id,member,config.api);
+    database.prepare("UPDATE glpi_creations SET result_json=?,state='completed',legacy_state='completed',terminal_error=NULL WHERE request_id=? AND member_id=? AND api_url=? AND acknowledged_at IS NULL").run(resultJson,input.request_id,member,config.api);
     database.prepare('UPDATE glpi_creation_aliases SET result_json=? WHERE operation_request_id=? AND member_id=? AND api_url=?').run(resultJson,input.request_id,member,config.api);
     const row = database.prepare('SELECT created_at FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?').get(input.request_id,member,config.api) as { created_at: string };
     return { payload: input, createdAt: String(row.created_at), ticket };
   });
   return { ticket, operation };
  }catch(e){
-  if(!sent||e instanceof GlpiRejected){transaction(database => { database.prepare('DELETE FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?').run(input.request_id,member,config.api); });throw e;}
+  if(!sent||e instanceof GlpiRejected){markCreation('rejected', e);throw e;}
+  markCreation('uncertain');
   // A timeout/error after POST may still have created a ticket. Never retry blindly.
   const row = db.prepare('SELECT payload_json,result_json,created_at FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?').get(input.request_id,member,config.api) as Pick<CreationRow, 'payload_json'|'result_json'|'created_at'> | undefined;
   let operation: GlpiCreationOperation | undefined;
