@@ -4,6 +4,18 @@ import { dirname, join } from 'node:path';
 import { dataPath, sqlite, transaction } from '@/db/raw';
 import { AuthError } from '@/lib/auth';
 
+// The expiry boundary is deliberately injectable for deterministic contract
+// tests. Production keeps the ordinary wall clock; tests can install a fake
+// clock and restore the returned function when they finish.
+let glpiClock: () => number = Date.now;
+export function setGlpiClock(clock: (() => number) | undefined) {
+  const previous = glpiClock;
+  glpiClock = clock || Date.now;
+  return () => { glpiClock = previous; };
+}
+function now() { return glpiClock(); }
+function nowIso() { return new Date(now()).toISOString(); }
+
 type Config = { api: string; web: string; appToken: string };
 export type GlpiTicket = { id: number; title: string; status: number; entity: number; url: string; client_id: string | null; client: string | null };
 type JsonObject = Record<string, unknown>;
@@ -68,6 +80,8 @@ export type GlpiFailureCode =
   | 'GLPI_RESPONSE_INVALID'
   | 'INVALID_REQUEST'
   | 'INTENT_INVALID'
+  | 'INTENT_REQUIRED'
+  | 'INTENT_REQUEST_MISMATCH'
   | 'INTENT_EXPIRED'
   | 'INTENT_CONSUMED'
   | 'INTENT_ABANDONED'
@@ -205,15 +219,15 @@ function creationFingerprint(input: GlpiCreateInput) {
 }
 type CreationRow = { request_id: string; member_id: string; api_url: string; payload_hash: string; payload_json: string | null; result_json: string | null; acknowledged_at: string | null; expires_at: string | null; legacy_state: string | null; state: string | null; terminal_error: string | null; distinct_intent_id: string | null; created_at: string };
 type AliasRow = { alias_request_id: string; operation_request_id: string; member_id: string; api_url: string; payload_hash: string; result_json: string | null; created_at: string; expires_at: string | null };
-type DistinctIntentRow = { intent_id: string; member_id: string; api_url: string; scope_request_id: string | null; created_at: string; expires_at: string; abandoned_at: string | null; used_at: string | null; used_request_id: string | null; used_payload_hash: string | null; operation_request_id: string | null };
+type DistinctIntentRow = { intent_id: string; member_id: string; api_url: string; scope_request_id: string | null; draft_request_id: string | null; created_at: string; expires_at: string; abandoned_at: string | null; used_at: string | null; used_request_id: string | null; used_payload_hash: string | null; operation_request_id: string | null };
 const creationColumns = 'request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,expires_at,legacy_state,state,terminal_error,distinct_intent_id,created_at';
 function operationFromRow(row: Pick<CreationRow, 'payload_json' | 'result_json' | 'created_at'>): GlpiCreationOperation {
   const parsed: unknown = row.payload_json ? JSON.parse(row.payload_json) : null;
   const ticket = row.result_json ? storedTicket(JSON.parse(row.result_json)) : undefined;
   return { payload: createInput(parsed), createdAt: row.created_at, ...(ticket ? { ticket } : {}) };
 }
-function resultExpiry(now = Date.now()) {
-  return new Date(now + GLPI_CREATION_RESULT_TTL_MS).toISOString();
+function resultExpiry(at = now()) {
+  return new Date(at + GLPI_CREATION_RESULT_TTL_MS).toISOString();
 }
 function cleanupCreationHistory(db: ReturnType<typeof sqlite>) {
   // Retention is a presentation concern, never an identity concern. Keeping
@@ -239,16 +253,17 @@ function operationError(row: CreationRow): never {
 }
 
 function verifyIntent(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, intentId: string, requestId: string, fingerprint: string) {
-  const intent = db.prepare(`SELECT intent_id,member_id,api_url,scope_request_id,created_at,expires_at,abandoned_at,used_at,used_request_id,used_payload_hash,operation_request_id
+  const intent = db.prepare(`SELECT intent_id,member_id,api_url,scope_request_id,draft_request_id,created_at,expires_at,abandoned_at,used_at,used_request_id,used_payload_hash,operation_request_id
     FROM glpi_creation_intents WHERE intent_id=?`).get(intentId) as DistinctIntentRow | undefined;
   if (!intent) throw new AuthError('L’intention de nouvelle demande est invalide ou inconnue.', 409, { code: 'INTENT_INVALID', retryable: false, preserveOperation: true });
   if (intent.member_id !== member || intent.api_url !== apiUrl) throw new AuthError('L’intention de nouvelle demande ne correspond pas à votre session GLPI.', 403);
+  if (intent.draft_request_id && intent.draft_request_id !== requestId) throw new AuthError('Cette intention de nouvelle demande est liée à un autre brouillon.', 409, { code: 'INTENT_REQUEST_MISMATCH', retryable: false, preserveOperation: true });
   if (intent.abandoned_at) throw new AuthError('L’intention de nouvelle demande a été abandonnée explicitement.', 409, { code: 'INTENT_ABANDONED', terminal: true, retryable: false, preserveOperation: false });
   if (intent.used_at) {
     if (intent.used_request_id === requestId && intent.used_payload_hash === fingerprint) return { intent, reused: true };
     throw new AuthError('Cette intention de nouvelle demande a déjà été consommée.', 409, { code: 'INTENT_CONSUMED', terminal: true, retryable: false, preserveOperation: false });
   }
-  if (Date.parse(intent.expires_at) <= Date.now()) throw new AuthError('L’intention de nouvelle demande a expiré. Recommencez explicitement.', 409, { code: 'INTENT_EXPIRED', retryable: false, preserveOperation: true });
+  if (Date.parse(intent.expires_at) <= now()) throw new AuthError('L’intention de nouvelle demande a expiré. Recommencez explicitement.', 409, { code: 'INTENT_EXPIRED', retryable: false, preserveOperation: true });
   return { intent, reused: false };
 }
 
@@ -259,8 +274,27 @@ function markIntentUsed(db: ReturnType<typeof sqlite>, intent: DistinctIntentRow
   }
   const result = db.prepare(`UPDATE glpi_creation_intents
     SET used_at=?,used_request_id=?,used_payload_hash=?,operation_request_id=?
-    WHERE intent_id=? AND used_at IS NULL`).run(new Date().toISOString(), requestId, fingerprint, operationId, intent.intent_id);
+    WHERE intent_id=? AND used_at IS NULL`).run(nowIso(), requestId, fingerprint, operationId, intent.intent_id);
   if (!result.changes) throw new AuthError('Cette intention de nouvelle demande a déjà été consommée.', 409, { code: 'INTENT_CONSUMED', terminal: true, retryable: false, preserveOperation: false });
+}
+
+function draftIntentForRequest(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, requestId: string) {
+  return db.prepare(`SELECT intent_id,member_id,api_url,scope_request_id,draft_request_id,created_at,expires_at,abandoned_at,used_at,used_request_id,used_payload_hash,operation_request_id
+    FROM glpi_creation_intents
+    WHERE member_id=? AND api_url=? AND draft_request_id=?
+    ORDER BY created_at DESC,intent_id DESC LIMIT 1`).get(member, apiUrl, requestId) as DistinctIntentRow | undefined;
+}
+
+function requireBoundIntentIfMissing(db: ReturnType<typeof sqlite>, member: string, apiUrl: string, requestId: string) {
+  const intent = draftIntentForRequest(db, member, apiUrl, requestId);
+  if (!intent) return intent;
+  if (intent.used_at) {
+    if (intent.operation_request_id) return intent;
+    throw new AuthError('Cette intention consommée ne possède plus de réservation durable. Aucun nouveau ticket ne sera envoyé.', 409, { code: 'INTENT_CONSUMED', terminal: true, retryable: false, preserveOperation: false });
+  }
+  if (intent.abandoned_at) throw new AuthError('L’intention de nouvelle demande a été abandonnée explicitement. Renouvelez-la explicitement.', 409, { code: 'INTENT_ABANDONED', terminal: true, retryable: false, preserveOperation: false });
+  if (Date.parse(intent.expires_at) <= now()) throw new AuthError('Cette intention de nouvelle demande a expiré. Renouvelez explicitement cette intention avant de créer le ticket.', 409, { code: 'INTENT_EXPIRED', retryable: false, preserveOperation: true });
+  throw new AuthError('Cette demande distincte doit conserver son intention serveur. Renouvelez explicitement cette intention avant de créer le ticket.', 409, { code: 'INTENT_REQUIRED', retryable: false, preserveOperation: true });
 }
 
 function intentIdFromInput(value: unknown) {
@@ -402,11 +436,11 @@ export async function glpiCreationOptions(member:string,config:Config,clientId:s
 /**
  * Issue a server-owned capability for the one UI action that intentionally
  * starts a second operation with the same business fingerprint. The caller's
- * session and configured GLPI URL are recorded in the database; the random
- * value is not a client assertion and is consumed atomically by the first
- * reservation that presents it.
+ * session, configured GLPI URL and browser draft UUID are recorded in the
+ * database; the random value is not a client assertion and is consumed
+ * atomically by the first reservation that presents it.
  */
-export function beginGlpiDistinctCreation(member: string, config: Config, scopeRequestId?: string): GlpiDistinctIntent {
+export function beginGlpiDistinctCreation(member: string, config: Config, scopeRequestId?: string, draftRequestId?: string): GlpiDistinctIntent {
   return transaction(db => {
     if (scopeRequestId) {
       const alias = aliasForRequest(db, member, config.api, scopeRequestId);
@@ -415,13 +449,24 @@ export function beginGlpiDistinctCreation(member: string, config: Config, scopeR
         : rowForRequest(db, member, config.api, scopeRequestId);
       if (!scoped) throw new AuthError('La demande d’origine de cette nouvelle intention est inconnue.', 409);
     }
-    const createdAt = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + GLPI_DISTINCT_INTENT_TTL_MS).toISOString();
+    if (draftRequestId) {
+      const existing = db.prepare('SELECT request_id FROM glpi_creations WHERE request_id=?').get(draftRequestId) as { request_id: string } | undefined;
+      const alias = db.prepare('SELECT alias_request_id FROM glpi_creation_aliases WHERE alias_request_id=?').get(draftRequestId) as { alias_request_id: string } | undefined;
+      if (existing || alias) throw new AuthError('Ce brouillon possède déjà une identité GLPI. Ouvrez une nouvelle demande explicite.', 409, { code: 'OPERATION_CONFLICT', retryable: false, preserveOperation: true });
+    }
+    const createdAt = nowIso();
+    const expiresAt = new Date(now() + GLPI_DISTINCT_INTENT_TTL_MS).toISOString();
     let intentId = randomBytes(32).toString('hex');
     while (db.prepare('SELECT 1 FROM glpi_creation_intents WHERE intent_id=?').get(intentId)) intentId = randomBytes(32).toString('hex');
+    // A renewal supersedes only an unused capability for the same durable
+    // draft. The draft UUID remains the identity the server will protect from
+    // a later ordinary fingerprint alias.
+    if (draftRequestId) db.prepare(`UPDATE glpi_creation_intents
+      SET abandoned_at=?
+      WHERE member_id=? AND api_url=? AND draft_request_id=? AND used_at IS NULL AND abandoned_at IS NULL`).run(createdAt, member, config.api, draftRequestId);
     db.prepare(`INSERT INTO glpi_creation_intents
-      (intent_id,member_id,api_url,scope_request_id,created_at,expires_at,abandoned_at,used_at,used_request_id,used_payload_hash,operation_request_id)
-      VALUES (?,?,?,?,?,?,NULL,NULL,NULL,NULL,NULL)`).run(intentId, member, config.api, scopeRequestId || null, createdAt, expiresAt);
+      (intent_id,member_id,api_url,scope_request_id,draft_request_id,created_at,expires_at,abandoned_at,used_at,used_request_id,used_payload_hash,operation_request_id)
+      VALUES (?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,NULL)`).run(intentId, member, config.api, scopeRequestId || null, draftRequestId || null, createdAt, expiresAt);
     return { intent_id: intentId, expiresAt };
   });
 }
@@ -437,7 +482,7 @@ export function abandonGlpiDistinctCreation(member: string, apiUrl: string, inte
       FROM glpi_creation_intents WHERE intent_id=?`).get(intentId) as Pick<DistinctIntentRow, 'intent_id' | 'member_id' | 'api_url' | 'abandoned_at' | 'used_at'> | undefined;
     if (!row || row.member_id !== member || row.api_url !== apiUrl) throw new AuthError('L’intention de nouvelle demande est invalide ou inconnue.', 409, { code: 'INTENT_INVALID', retryable: false, preserveOperation: true });
     if (row.used_at) return { ok: true };
-    if (!row.abandoned_at) db.prepare('UPDATE glpi_creation_intents SET abandoned_at=? WHERE intent_id=? AND used_at IS NULL AND abandoned_at IS NULL').run(new Date().toISOString(), intentId);
+    if (!row.abandoned_at) db.prepare('UPDATE glpi_creation_intents SET abandoned_at=? WHERE intent_id=? AND used_at IS NULL AND abandoned_at IS NULL').run(nowIso(), intentId);
     return { ok: true };
   });
 }
@@ -473,6 +518,18 @@ export async function createGlpiTicket(member:string,config:Config,rawInput:unkn
  const payloadJson=JSON.stringify(input);
  const reservation = transaction(db => {
    cleanupCreationHistory(db);
+   // Distinct capabilities are bound to the browser-issued draft UUID at
+   // issuance. Check that durable marker before any fingerprint alias lookup:
+   // an expired or missing capability must never fall through to an older
+   // operation with identical business fields.
+   const boundIntent = draftIntentForRequest(db, member, config.api, input.request_id);
+   if (boundIntent && distinctIntentId && boundIntent.intent_id !== distinctIntentId) {
+     throw new AuthError('Cette intention de nouvelle demande est liée à un autre brouillon ou a été renouvelée.', 409, { code: 'INTENT_REQUEST_MISMATCH', retryable: false, preserveOperation: true });
+   }
+   if (!distinctIntentId) requireBoundIntentIfMissing(db, member, config.api, input.request_id);
+   const verifiedIntent = distinctIntentId
+     ? verifyIntent(db, member, config.api, distinctIntentId, input.request_id, fingerprint)
+     : undefined;
    const alias = aliasForRequest(db, member, config.api, input.request_id);
    if (alias && (alias.member_id !== member || alias.api_url !== config.api || alias.payload_hash !== fingerprint)) throw new AuthError('Cette demande a changé. Ouvrez un nouveau formulaire.', 409);
    const globalByRequest = db.prepare(`SELECT member_id,api_url,payload_hash FROM glpi_creations WHERE request_id=?`).get(input.request_id) as { member_id: string; api_url: string; payload_hash: string } | undefined;
@@ -491,9 +548,9 @@ export async function createGlpiTicket(member:string,config:Config,rawInput:unkn
      AND payload_json IS NULL AND result_json IS NULL AND acknowledged_at IS NULL
      AND COALESCE(legacy_state,'pending')='pending' LIMIT 1`).get(member);
    if (legacy) throw new AuthError('Une opération GLPI historique reste indécise. Vérifiez GLPI puis abandonnez-la explicitement ou récupérez-la avec une preuve avant toute nouvelle création.', 409);
-   const intent = distinctIntentId ? verifyIntent(db, member, config.api, distinctIntentId, input.request_id, fingerprint) : undefined;
-   if (intent?.reused) throw new AuthError('L’intention consommée ne possède plus de réservation durable. Aucun nouveau ticket ne sera envoyé.', 409, { code: 'INTENT_CONSUMED', terminal: true, retryable: false, preserveOperation: false });
-   if (!intent) {
+   const intent = verifiedIntent?.intent;
+   if (verifiedIntent?.reused) throw new AuthError('L’intention consommée ne possède plus de réservation durable. Aucun nouveau ticket ne sera envoyé.', 409, { code: 'INTENT_CONSUMED', terminal: true, retryable: false, preserveOperation: false });
+   if (!intent && !boundIntent) {
      const existing = authoritativeCreation(db, member, config.api, fingerprint);
      if (existing) {
        linkCreationAlias(db, input, existing);
@@ -501,14 +558,14 @@ export async function createGlpiTicket(member:string,config:Config,rawInput:unkn
      }
     if (terminalCreation(db, member, config.api, fingerprint)) throw new GlpiDistinctRequired();
    }
-   const createdAt = new Date().toISOString();
+   const createdAt = nowIso();
    const reserved = db.prepare(`INSERT OR IGNORE INTO glpi_creations
      (request_id,member_id,api_url,payload_hash,payload_json,result_json,acknowledged_at,expires_at,legacy_state,state,terminal_error,distinct_intent_id,created_at)
      VALUES (?,?,?,?,?,NULL,NULL,NULL,'active','active',NULL,?,?)`).run(input.request_id, member, config.api, fingerprint, payloadJson, distinctIntentId || null, createdAt);
    if (reserved.changes) {
      const row = db.prepare(`SELECT ${creationColumns} FROM glpi_creations WHERE request_id=? AND member_id=? AND api_url=?`).get(input.request_id, member, config.api) as CreationRow | undefined;
      if (!row) throw new AuthError('La réservation GLPI n’a pas pu être conservée. Réessayez après vérification.', 503);
-     if (intent) markIntentUsed(db, intent.intent, input.request_id, fingerprint, row.request_id);
+     if (intent) markIntentUsed(db, intent, input.request_id, fingerprint, row.request_id);
      linkCreationAlias(db, input, row);
      return { row, reserved: true, intentConsumed: !!intent };
    }

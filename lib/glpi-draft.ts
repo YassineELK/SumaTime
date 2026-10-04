@@ -217,13 +217,16 @@ export function subscribePendingGlpiRequest(memberId: string, listener: DraftLis
   };
 }
 
-export function savePendingGlpiRequest(value: GlpiRequestPayload, storage: StorageLike | null | undefined = browserStorage(), memberId = '', distinctIntent?: GlpiDistinctCapability): GlpiDraftStorageResult {
+export function savePendingGlpiRequest(value: GlpiRequestPayload, storage: StorageLike | null | undefined = browserStorage(), memberId = '', distinctIntent?: GlpiDistinctCapability, options: { preserveExpiredCapability?: boolean } = {}): GlpiDraftStorageResult {
   if (!payload(value)) return { ok: false, reason: 'corrupt' };
   const target = storage ?? browserStorage();
   const current = readStore(target, memberId);
   if (current.status !== 'ok') return { ok: false, reason: current.status };
   const requests = current.store.requests.filter(item => item.payload.request_id !== value.request_id);
-  const capability = liveCapability(distinctIntent);
+  // An expired capability is never an authorization to submit, but retaining
+  // it beside the durable draft lets a remounted UI show an explicit renewal
+  // state instead of silently turning the UUID into an ordinary request.
+  const capability = options.preserveExpiredCapability ? distinctIntent : liveCapability(distinctIntent);
   requests.unshift({ payload: { ...value }, savedAt: Date.now(), ...(capability ? { distinctIntent: { ...capability } } : {}) });
   const result = writeStore(target, { version: 2, requests: requests.slice(0, GLPI_UNCERTAIN_MAX_REQUESTS) }, memberId);
   if (result.ok) announce(memberId, { payload: { ...value }, savedAt: Date.now(), ...(capability ? { distinctIntent: { ...capability } } : {}) });

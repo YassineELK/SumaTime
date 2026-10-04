@@ -49,9 +49,18 @@ async function apiValue(response: Response): Promise<ApiValue> {
 }
 
 function capability(value: PendingGlpiRequest['distinctIntent'] | null | undefined): GlpiDistinctCapability | null {
-  return value && /^[a-f0-9]{64}$/.test(value.intent_id) && Number.isFinite(Date.parse(value.expiresAt)) && Date.parse(value.expiresAt) > Date.now()
+  const marker = distinctMarker(value);
+  return marker && Date.parse(marker.expiresAt) > Date.now() ? marker : null;
+}
+
+function distinctMarker(value: PendingGlpiRequest['distinctIntent'] | null | undefined): GlpiDistinctCapability | null {
+  return value && /^[a-f0-9]{64}$/.test(value.intent_id) && Number.isFinite(Date.parse(value.expiresAt))
     ? { intent_id: value.intent_id, expiresAt: value.expiresAt }
     : null;
+}
+
+function validRequestId(value: string | null | undefined) {
+  return typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value);
 }
 
 function terminalFailure(value: ApiValue, hasCapability = false) {
@@ -62,7 +71,9 @@ function terminalFailure(value: ApiValue, hasCapability = false) {
 
 export default function NewGlpiTicket({ clients, memberId = '', initialClient = '', initialDescription = '', disabled = false, onCreated }: { clients: Client[]; memberId?: string; initialClient?: string; initialDescription?: string; disabled?: boolean; onCreated: (ticket: GlpiTicket) => void }) {
   const [initialPending] = useState<PendingGlpiRequest | null>(() => readPendingGlpiRequest(initialClient, initialDescription, undefined, memberId));
-  const initialMode: UiMode = initialPending ? 'uncertain' : 'idle';
+  const initialDistinctMarker = distinctMarker(initialPending?.distinctIntent);
+  const [initialDistinctDraft] = useState(() => !!initialDistinctMarker && Date.parse(initialDistinctMarker.expiresAt) <= Date.now());
+  const initialMode: UiMode = initialPending ? (initialDistinctDraft ? 'draft' : 'uncertain') : 'idle';
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
   const [form, setForm] = useState<Form>(() => initialPending?.payload || blankForm(initialDescription));
@@ -72,7 +83,8 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
   const [error, setError] = useState('');
   const [uncertain, setUncertain] = useState(initialMode === 'uncertain');
   const [created, setCreated] = useState<GlpiTicket | null>(null);
-  const [distinctRequired, setDistinctRequired] = useState(false);
+  const [distinctRequired, setDistinctRequired] = useState(initialDistinctDraft);
+  const [distinctExpired, setDistinctExpired] = useState(() => !!initialDistinctMarker && Date.parse(initialDistinctMarker.expiresAt) <= Date.now());
   const [mode, setModeState] = useState<UiMode>(initialMode);
   const [storageIssue, setStorageIssue] = useState<Exclude<GlpiDraftStorageStatus, 'ok'> | null>(() => {
     const value = getGlpiDraftStorageStatus(memberId);
@@ -89,13 +101,13 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
   const currentMember = useRef(memberId);
   const memberEpoch = useRef(0);
   const modeRef = useRef<UiMode>(initialMode);
-  const operation = useRef<Form | null>(initialPending?.payload || null);
-  const uncertainPayload = useRef<Form | null>(initialPending?.payload || null);
+  const operation = useRef<Form | null>(initialDistinctDraft ? null : initialPending?.payload || null);
+  const uncertainPayload = useRef<Form | null>(initialDistinctDraft ? null : initialPending?.payload || null);
   const currentCreated = useRef<GlpiTicket | null>(null);
-  const draftOwned = useRef(false);
+  const draftOwned = useRef(initialDistinctDraft);
   const serverPending = useRef<ServerRequest | null>(null);
-  const distinctIntent = useRef<string | null>(capability(initialPending?.distinctIntent)?.intent_id || null);
-  const distinctIntentExpiresAt = useRef<string | null>(capability(initialPending?.distinctIntent)?.expiresAt || null);
+  const distinctIntent = useRef<string | null>(initialDistinctMarker?.intent_id || null);
+  const distinctIntentExpiresAt = useRef<string | null>(initialDistinctMarker?.expiresAt || null);
   const serverBlockedRef = useRef(false);
   const controllers = useRef(new Map<AsyncKind, AbortController>());
   const sequences = useRef<Record<AsyncKind, number>>({ pending: 0, status: 0, options: 0, submit: 0, ack: 0, resolve: 0, intent: 0 });
@@ -159,6 +171,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     setUncertain(false);
     setCreated(null);
     setDistinctRequired(false);
+    setDistinctExpired(false);
     setBusy(false);
     setLoading(false);
     setError('');
@@ -182,15 +195,34 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       serverPending.current = { payload: pendingRequest.payload, createdAt: new Date(pendingRequest.savedAt).toISOString() };
       return;
     }
-    operation.current = pendingRequest.payload;
-    uncertainPayload.current = pendingRequest.payload;
-    const pendingCapability = capability(pendingRequest.distinctIntent);
-    distinctIntent.current = pendingCapability?.intent_id || null;
-    distinctIntentExpiresAt.current = pendingCapability?.expiresAt || null;
+    const pendingMarker = distinctMarker(pendingRequest.distinctIntent);
+    const pendingCapability = capability(pendingMarker);
+    distinctIntent.current = pendingMarker?.intent_id || null;
+    distinctIntentExpiresAt.current = pendingMarker?.expiresAt || null;
     currentCreated.current = null;
     setForm(pendingRequest.payload);
+    // A marker without a server reservation is a draft, not an uncertain
+    // operation. In particular, an expired marker must remain visible so the
+    // user can renew the explicit intention for this same UUID.
+    if (pendingMarker && !pendingCapability) {
+      operation.current = null;
+      uncertainPayload.current = null;
+      draftOwned.current = true;
+      setUncertain(false);
+      setDistinctRequired(true);
+      setDistinctExpired(!pendingCapability);
+      setMode('draft');
+      setError(pendingCapability
+        ? 'Cette demande distincte est conservée. Envoyez-la avec son intention serveur ou renouvelez-la si elle expire.'
+        : 'L’intention de cette demande distincte a expiré. Renouvelez-la explicitement avant de créer le ticket.');
+      setCategories([]);
+      return;
+    }
+    operation.current = pendingRequest.payload;
+    uncertainPayload.current = pendingRequest.payload;
     setUncertain(true);
     setDistinctRequired(false);
+    setDistinctExpired(false);
     setCreated(null);
     setMode('uncertain');
     setCategories([]);
@@ -216,6 +248,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       setCreated(request.ticket);
       setUncertain(false);
       setDistinctRequired(false);
+      setDistinctExpired(false);
       setMode('result');
       setError('Résultat récupéré depuis le serveur membre-scopé. Confirmez sa consommation pour clore cette opération.');
     } else {
@@ -223,6 +256,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       setCreated(null);
       setUncertain(true);
       setDistinctRequired(false);
+      setDistinctExpired(false);
       setMode('uncertain');
       setError('Résultat incertain : la demande conservée utilise le même UUID et le même payload. Récupérez son résultat avant toute nouvelle demande.');
     }
@@ -338,8 +372,8 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     setError('');
   }
 
-  function currentCapability(): GlpiDistinctCapability | undefined {
-    const value = capability(distinctIntent.current && distinctIntentExpiresAt.current
+  function currentMarker(): GlpiDistinctCapability | undefined {
+    const value = distinctMarker(distinctIntent.current && distinctIntentExpiresAt.current
       ? { intent_id: distinctIntent.current, expiresAt: distinctIntentExpiresAt.current }
       : undefined);
     if (!value) {
@@ -349,26 +383,34 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     return value || undefined;
   }
 
+  function currentCapability(): GlpiDistinctCapability | undefined {
+    const value = currentMarker();
+    return value && Date.parse(value.expiresAt) > Date.now() ? value : undefined;
+  }
+
   function clearDistinctCapability() {
     distinctIntent.current = null;
     distinctIntentExpiresAt.current = null;
+    setDistinctExpired(false);
   }
 
   function updateForm(patch: Partial<Form>) {
     markDraft();
-    setDistinctRequired(false);
     const next = { ...form, ...patch };
     setForm(next);
-    const active = currentCapability();
-    if (active) {
-      const stored = savePendingGlpiRequest(next, undefined, memberId, active);
+    const marker = currentMarker();
+    const expired = !!marker && Date.parse(marker.expiresAt) <= Date.now();
+    setDistinctRequired(expired ? true : false);
+    setDistinctExpired(expired);
+    if (marker) {
+      const stored = savePendingGlpiRequest(next, undefined, memberId, marker, { preserveExpiredCapability: true });
       if (!stored.ok) setStorageIssue(stored.reason);
     }
   }
 
-  function enterDraft(clientId: string, description: string, seed?: Form, distinct?: GlpiDistinctCapability): Form {
+  function enterDraft(clientId: string, description: string, seed?: Form, distinct?: GlpiDistinctCapability, requestId?: string): Form {
     const next = seed
-      ? { ...seed, request_id: crypto.randomUUID(), client_id: clientId || seed.client_id }
+      ? { ...seed, request_id: requestId || crypto.randomUUID(), client_id: clientId || seed.client_id }
       : newForm(clientId, description);
     draftOwned.current = true;
     operation.current = null;
@@ -379,7 +421,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     if (distinct) {
       distinctIntent.current = distinct.intent_id;
       distinctIntentExpiresAt.current = distinct.expiresAt;
-      const stored = savePendingGlpiRequest(next, undefined, memberId, distinct);
+      const stored = savePendingGlpiRequest(next, undefined, memberId, distinct, { preserveExpiredCapability: true });
       if (!stored.ok) setStorageIssue(stored.reason);
       announcePendingGlpiRequest(memberId, { payload: next, savedAt: Date.now(), distinctIntent: distinct });
     }
@@ -388,6 +430,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     setCategories([]);
     setUncertain(false);
     setDistinctRequired(false);
+    setDistinctExpired(false);
     setCreated(null);
     setServerBlocked(false);
     setLegacyRequests([]);
@@ -426,10 +469,17 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     const request = begin('intent');
     try {
       const previousRequestId = operation.current?.request_id || serverPending.current?.payload.request_id;
+      const marker = currentMarker();
+      // Before reservation, a renewal keeps the exact draft UUID. A new
+      // explicit action from an already-reserved/result operation gets a new
+      // UUID, so it cannot ever replay that operation's result.
+      const draftRequestId = !operation.current && marker && validRequestId(form.request_id)
+        ? form.request_id
+        : crypto.randomUUID();
       const response = await fetch('/api/glpi', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'beginDistinctCreation', ...(previousRequestId ? { previous_request_id: previousRequestId } : {}) }),
+        body: JSON.stringify({ action: 'beginDistinctCreation', draft_request_id: draftRequestId, ...(previousRequestId ? { previous_request_id: previousRequestId } : {}) }),
         signal: request.controller.signal,
       });
       const value = await apiValue(response);
@@ -437,7 +487,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       if (!response.ok || typeof value.intent_id !== 'string' || !/^[a-f0-9]{64}$/.test(value.intent_id)) throw new Error(value.error || 'L’intention de nouvelle demande n’a pas pu être autorisée.');
       if (typeof value.expiresAt !== 'string' || !Number.isFinite(Date.parse(value.expiresAt)) || Date.parse(value.expiresAt) <= Date.now()) throw new Error('L’intention de nouvelle demande a expiré avant son utilisation.');
       const clientId = clients.some(client => client.id === form.client_id && client.active && client.glpi_entity_id !== null) ? form.client_id : '';
-      enterDraft(clientId, '', form, { intent_id: value.intent_id, expiresAt: value.expiresAt });
+      enterDraft(clientId, '', form, { intent_id: value.intent_id, expiresAt: value.expiresAt }, draftRequestId);
       return true;
     } finally {
       finish('intent', request.controller);
@@ -510,17 +560,22 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     const payload = canonical(form);
     setForm(payload);
     const activeCapability = currentCapability();
-    const stored = savePendingGlpiRequest(payload, undefined, memberId, activeCapability);
+    const marker = currentMarker();
+    const stored = savePendingGlpiRequest(payload, undefined, memberId, marker, { preserveExpiredCapability: true });
     if (!stored.ok) setStorageIssue(stored.reason);
-    announcePendingGlpiRequest(memberId, { payload, savedAt: Date.now(), ...(activeCapability ? { distinctIntent: activeCapability } : {}) });
+    announcePendingGlpiRequest(memberId, { payload, savedAt: Date.now(), ...(marker ? { distinctIntent: marker } : {}) });
     const request = begin('submit');
     let certainResponse = false;
     let distinctConflict = false;
+    let distinctRenewalRequired = false;
+    let intentExpired = false;
     try {
       const response = await fetch('/api/glpi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, action: 'createTicket', ...(distinctIntent.current ? { distinct_intent: distinctIntent.current } : {}) }), signal: request.controller.signal });
       const value = await apiValue(response);
       if (!request.valid()) return;
       if (!response.ok) {
+        intentExpired = value.code === 'INTENT_EXPIRED';
+        distinctRenewalRequired = intentExpired || value.code === 'INTENT_REQUIRED' || value.code === 'INTENT_REQUEST_MISMATCH';
         certainResponse = terminalFailure(value, !!activeCapability);
         distinctConflict = value.distinct_required === true || value.code === 'DISTINCT_REQUIRED';
         const authoritative = value.operation?.payload || payload;
@@ -556,7 +611,23 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       setError('Ticket créé dans GLPI. Confirmez sa consommation pour clore cette opération.');
     } catch (reason) {
       if (!request.valid()) return;
-      if (!certainResponse) {
+      if (distinctRenewalRequired) {
+        // Expiry or disappearance of the server capability is a certain
+        // refusal of this *distinct* draft, not an uncertain provider result.
+        // Keep the same UUID/payload and require an explicit renewal; never
+        // clear the durable marker or silently enter the ordinary alias path.
+        draftOwned.current = true;
+        operation.current = null;
+        uncertainPayload.current = null;
+        serverPending.current = null;
+        setForm(payload);
+        setUncertain(false);
+        setMode('draft');
+        setDistinctRequired(true);
+        setDistinctExpired(intentExpired || !!marker && Date.parse(marker.expiresAt) <= Date.now());
+        setRecoveryAction(null);
+        setError(reason instanceof Error ? reason.message : 'L’intention de nouvelle demande doit être renouvelée explicitement.');
+      } else if (!certainResponse) {
         draftOwned.current = false;
         setMode('uncertain');
         setUncertain(true);
@@ -600,6 +671,8 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
     const request = begin('submit');
     let terminalResponse = false;
     let responseStatus: number | null = null;
+    let distinctRenewalRequired = false;
+    let intentExpired = false;
     const activeCapability = currentCapability();
     try {
       const response = await fetch('/api/glpi', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, action: 'createTicket', ...(distinctIntent.current ? { distinct_intent: distinctIntent.current } : {}) }), signal: request.controller.signal });
@@ -607,6 +680,8 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       const value = await apiValue(response);
       if (!request.valid()) return;
       if (!response.ok) {
+        intentExpired = value.code === 'INTENT_EXPIRED';
+        distinctRenewalRequired = intentExpired || value.code === 'INTENT_REQUIRED' || value.code === 'INTENT_REQUEST_MISMATCH';
         terminalResponse = terminalFailure(value, !!activeCapability);
         if (value.operation?.payload) {
           operation.current = value.operation.payload;
@@ -636,7 +711,22 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
       setError('Résultat récupéré explicitement. Confirmez sa consommation pour clore cette opération.');
     } catch (reason) {
       if (request.valid()) {
-        if (terminalResponse) {
+        if (distinctRenewalRequired) {
+          // The provider was never addressed under this expired/missing
+          // capability. Return to the same explicit draft and ask for a new
+          // server intention instead of recovering or aliasing anything.
+          draftOwned.current = true;
+          operation.current = null;
+          uncertainPayload.current = null;
+          serverPending.current = null;
+          setForm(payload);
+          setUncertain(false);
+          setMode('draft');
+          setDistinctRequired(true);
+          const marker = currentMarker();
+          setDistinctExpired(intentExpired || !!marker && Date.parse(marker.expiresAt) <= Date.now());
+          setRecoveryAction(null);
+        } else if (terminalResponse) {
           const fresh = uncertainPayload.current || operation.current || payload;
           clearDistinctCapability();
           removePendingGlpiRequest(payload.request_id, undefined, memberId);
@@ -719,7 +809,7 @@ export default function NewGlpiTicket({ clients, memberId = '', initialClient = 
         {error && <div className="alert error" role="alert">{error}</div>}
         {storageIssue && <div className="alert error" role="status">Le stockage local de ce navigateur est indisponible ou invalide. L’état serveur membre-scopé est utilisé ; aucune nouvelle création ne sera envoyée sans vérification.</div>}
         {legacyRequests.length > 0 && <div className="alert error glpi-legacy" role="alert"><strong>Création GLPI historique à résoudre</strong><span>Cette ancienne opération n’a ni payload ni résultat confirmé. Vérifiez GLPI avant toute création, puis abandonnez-la explicitement si aucun ticket n’existe.</span><button type="button" className="secondary" disabled={busy} onClick={() => void abandonLegacyRequest()}>J’ai vérifié GLPI — abandonner l’opération</button></div>}
-        {distinctRequired && !created && !uncertain && <div className="alert error glpi-conflict" role="alert"><strong>Nouvelle demande distincte requise</strong><span>Ces champs correspondent à une demande déjà terminée. Autorisez explicitement une nouvelle intention pour conserver les mêmes champs métier.</span><button type="button" className="text-button" disabled={busy} onClick={() => void startDistinctRequest()}>Commencer une nouvelle demande distincte</button></div>}
+        {distinctRequired && !created && !uncertain && <div className="alert error glpi-conflict" role="alert"><strong>{distinctExpired ? 'Intention distincte expirée' : 'Nouvelle demande distincte requise'}</strong><span>{distinctExpired ? 'Cette intention serveur a expiré ou n’est plus disponible. Le même brouillon reste verrouillé : renouvelez explicitement l’intention avant de créer le ticket.' : 'Ces champs correspondent à une demande déjà terminée. Autorisez explicitement une nouvelle intention pour conserver les mêmes champs métier.'}</span><button type="button" className="text-button" disabled={busy} onClick={() => void startDistinctRequest()}>{distinctExpired ? 'Renouveler l’intention distincte' : 'Commencer une nouvelle demande distincte'}</button></div>}
         {uncertain && !created && <div className="alert error glpi-uncertain" role="status"><strong>Résultat incertain</strong><span>La réponse de GLPI n’a pas pu être confirmée. Le même UUID et le même payload restent conservés ; aucun renvoi automatique ne sera effectué.</span>{recoveryAction === 'reauth' && <span>Votre session a expiré. Reconnectez votre compte GLPI, puis réessayez avec cette même demande.</span>}{recoveryAction === 'retry' && <span>Vérifiez votre connexion ou patientez après le délai indiqué, puis réessayez avec cette même demande.</span>}<div className="quick-actions"><button type="button" className="secondary" aria-label="Réessayer la récupération du résultat GLPI" disabled={busy} onClick={() => void reconcile()}>Récupérer le résultat</button>{status?.web && <a href={status.web} target="_blank" rel="noreferrer" className="text-button">Vérifier dans GLPI</a>}</div><button type="button" className="text-button" disabled={busy} onClick={() => void startDistinctRequest()}>Commencer une nouvelle demande distincte</button></div>}
         {created ? <div className="glpi-created"><p role="status"><Check size={18} />GLPI-{created.id} · {created.title}</p><a href={created.url} target="_blank" rel="noreferrer" className="text-button"><ExternalLink size={16} />Ouvrir dans GLPI</a><div className="quick-actions"><button type="button" className="secondary" disabled={busy} onClick={() => setOpen(false)}>Fermer</button><button type="button" className="primary" disabled={busy} onClick={() => void consumeCreated()}>Utiliser ce ticket</button></div><button type="button" className="text-button" disabled={busy} onClick={() => void startDistinctRequest()}>Commencer une nouvelle demande distincte</button></div> : !status ? <p>Vérification de la connexion GLPI…</p> : !status.configured || !status.connected ? <p>Connectez d’abord votre compte depuis « Mes tickets GLPI ».</p> : !status.canCreate ? <p>La création de tickets est désactivée dans cet environnement. Votre administrateur peut l’activer pour une instance GLPI autorisée.</p> : <form className="quick-form" onSubmit={submit}>
           <fieldset disabled={busy || uncertain || blockedForForm}>

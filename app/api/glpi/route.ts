@@ -75,8 +75,9 @@ export async function POST(request: Request) {
       context = 'intent';
       const config = glpiConfig(); if (!config) throw new AuthError('GLPI doit être configuré.', 409, { code:'CONFIG_NOT_READY', retryable:true, preserveOperation:true });
       if (body.previous_request_id !== undefined && (typeof body.previous_request_id !== 'string' || !/^[a-f0-9-]{36}$/.test(body.previous_request_id))) throw new AuthError('Demande d’origine invalide.');
+      if (typeof body.draft_request_id !== 'string' || !/^[a-f0-9-]{36}$/.test(body.draft_request_id)) throw new AuthError('Identité du brouillon obligatoire et invalide.');
       rateLimit('glpi-distinct-intent:'+me.id,10,60000);
-      return json(beginGlpiDistinctCreation(me.id, config, body.previous_request_id));
+      return json(beginGlpiDistinctCreation(me.id, config, body.previous_request_id, body.draft_request_id));
     }
     if (body.action === 'abandonDistinctCreation') {
       context = 'intent';

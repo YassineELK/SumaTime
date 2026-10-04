@@ -49,7 +49,7 @@ export function sqlite() {
     CREATE TABLE IF NOT EXISTS glpi_creation_intents (
       intent_id TEXT PRIMARY KEY,
       member_id TEXT NOT NULL REFERENCES members(id), api_url TEXT NOT NULL,
-      scope_request_id TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+      scope_request_id TEXT, draft_request_id TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
       abandoned_at TEXT, used_at TEXT, used_request_id TEXT, used_payload_hash TEXT, operation_request_id TEXT
     );
     CREATE INDEX IF NOT EXISTS glpi_creation_intents_member
@@ -102,6 +102,11 @@ export function sqlite() {
       db.exec('ALTER TABLE glpi_creations ADD COLUMN distinct_intent_id TEXT');
     }
     const intentColumns = db.prepare('PRAGMA table_info(glpi_creation_intents)').all() as { name: string }[];
+    if (!intentColumns.some(column => column.name === 'draft_request_id')) {
+      db.exec('ALTER TABLE glpi_creation_intents ADD COLUMN draft_request_id TEXT');
+    }
+    db.exec(`CREATE INDEX IF NOT EXISTS glpi_creation_intents_draft_request
+      ON glpi_creation_intents(member_id,api_url,draft_request_id,created_at);`);
     if (!intentColumns.some(column => column.name === 'abandoned_at')) {
       db.exec('ALTER TABLE glpi_creation_intents ADD COLUMN abandoned_at TEXT');
     }
