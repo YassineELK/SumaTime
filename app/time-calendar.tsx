@@ -11,9 +11,11 @@ import { addDays, findCalendarFocus, layoutEntries, overlaps, restoreEntryPayloa
 import { weekStart } from '@/lib/calendar';
 import type { Entry, State } from '@/lib/types';
 import { browserUuidV4, BROWSER_UUID_UNAVAILABLE_MESSAGE } from '@/lib/browser-uuid';
+import TicketPicker from '@/components/ticket-picker';
+import { ticketSelectionReady, type TicketSource } from '@/lib/ticket-selection';
 
 type Selection = { date: string; first: number; last: number; mode: 'mouse' | 'touch' | 'keyboard' };
-type Draft = { id: string; version?: number; client_id: string; ticket: string; date: string; start: string; end: string; description: string; on_site: boolean | null; member_id: string; member: string; billed: number };
+type Draft = { id: string; version?: number; client_id: string; ticket: string; ticket_source?: TicketSource; glpi_ticket_id?: number | null; date: string; start: string; end: string; description: string; on_site: boolean | null; member_id: string; member: string; billed: number };
 type UndoMove = { id: string; original: Pick<Entry, 'date' | 'start' | 'end'>; version: number };
 type FocusTarget = CalendarFocusTarget & { date: string };
 const dayName = (date: string, long = false) => new Date(date + 'T12:00:00Z').toLocaleDateString('fr-BE', { timeZone: 'UTC', weekday: long ? 'long' : 'short', day: 'numeric', month: long ? 'long' : undefined });
@@ -119,10 +121,10 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
     let id: string;
     try { id = browserUuidV4(); }
     catch { setOperationError(true); setNotice(BROWSER_UUID_UNAVAILABLE_MESSAGE); return; }
-    showDraft({ id, client_id: data.clients.find(c => c.active)?.id || '', ticket: '', date, start: clockTime(start), end: end === 1440 ? '00:00' : clockTime(end), description: '', on_site: false, member_id: me.id, member: me.name, billed: 0 });
+    showDraft({ id, client_id: data.clients.find(c => c.active)?.id || '', ticket: '', glpi_ticket_id: null, date, start: clockTime(start), end: end === 1440 ? '00:00' : clockTime(end), description: '', on_site: false, member_id: me.id, member: me.name, billed: 0 });
   }
   function openEntry(entry: Entry) {
-    showDraft({ id: entry.id, version: entry.version, client_id: entry.client_id, ticket: entry.ticket, date: entry.date, start: clockTime(entry.start), end: entry.end === 1440 ? '00:00' : clockTime(entry.end), description: entry.description, on_site: entry.on_site === null ? null : !!entry.on_site, member_id: entry.member_id, member: entry.member, billed: entry.billed });
+    showDraft({ id: entry.id, version: entry.version, client_id: entry.client_id, ticket: entry.ticket, ticket_source: entry.ticket_source, glpi_ticket_id: entry.glpi_ticket_id, date: entry.date, start: clockTime(entry.start), end: entry.end === 1440 ? '00:00' : clockTime(entry.end), description: entry.description, on_site: entry.on_site === null ? null : !!entry.on_site, member_id: entry.member_id, member: entry.member, billed: entry.billed });
   }
   function closeDraft() {
     if (savingRef.current) return;
@@ -291,8 +293,10 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
           {!data.clients.some(c => c.active) && !draft.version && <div className="alert error">Ajoutez d’abord un client dans l’onglet Clients, puis revenez sélectionner votre plage horaire.</div>}
           <fieldset disabled={saving || readOnly}>
             <label>Client <span className="required">*</span><select autoFocus required value={draft.client_id} onChange={e => update('client_id', e.target.value)}><option value="">Choisir un client</option>{data.clients.filter(c => c.active || (draft.version && c.id === draft.client_id)).map(c => <option key={c.id} value={c.id}>{c.name}{c.active ? '' : ' (archivé)'}</option>)}</select></label>
-            <label>Numéro de ticket <span className="required">*</span><input required maxLength={120} placeholder="Ex. INC-2026-042" value={draft.ticket} onChange={e => update('ticket', e.target.value)} /></label>
-            {!readOnly&&<NewGlpiTicket clients={data.clients} memberId={data.me!.id} initialClient={draft.client_id} initialDescription={draft.description} disabled={saving} onCreated={ticket=>setDraft(prev=>prev?{...prev,client_id:ticket.client_id||prev.client_id,ticket:'GLPI-'+ticket.id,description:prev.description||ticket.title}:prev)}/>}
+            <TicketPicker clients={data.clients} clientId={draft.client_id} value={draft} disabled={saving || readOnly} onChange={value => setDraft(previous => previous ? { ...previous, ...value } : previous)} />
+            {!readOnly && (
+              <NewGlpiTicket clients={data.clients} memberId={data.me!.id} initialClient={draft.client_id} initialDescription={draft.description} disabled={saving} onCreated={ticket=>setDraft(prev=>prev?{...prev,client_id:ticket.client_id||prev.client_id,ticket:'GLPI-'+ticket.id,ticket_source:'glpi',glpi_ticket_id:ticket.id,description:prev.description||ticket.title}:prev)} />
+            )}
             <div className="calendar-modal-times"><label>Date <span className="required">*</span><input required type="date" max={today} value={draft.date} onChange={e => update('date', e.target.value)} /></label><TimeInput label="Début" value={draft.start} onChange={value => update('start', value)} disabled={saving || readOnly} /><TimeInput label="Fin" value={draft.end} onChange={value => update('end', value)} disabled={saving || readOnly} /></div>
             <LocationField value={draft.on_site} onChange={on_site => setDraft(prev => prev ? ({ ...prev, on_site }) : prev)} disabled={saving || readOnly} />
             <label>Description <span className="optional">facultatif</span><textarea rows={3} maxLength={2000} value={draft.description} onChange={e => update('description', e.target.value)} placeholder="Sur quoi avez-vous travaillé ?" /></label>
@@ -300,7 +304,7 @@ export default function TimeCalendar({ data, onSaved }: { data: State; onSaved: 
           <div className="duration-preview"><div><span>Temps réel</span><strong>{validTimes ? duration(end - begin) : '—'}</strong></div><ChevronRight size={18} /><div><span>À facturer</span><strong>{validTimes ? duration(billedMinutes(begin, end)) : '—'}</strong></div></div>
           {conflict && !readOnly && <p className="calendar-conflict" role="alert">Ce créneau chevauche une autre prestation de {draft.member}. Ajustez les horaires.</p>}
           {deleting&&<div className="inline-confirm" role="alert"><p>Supprimer la prestation <strong>{draft.ticket}</strong> de {data.clients.find(c=>c.id===draft.client_id)?.name}, le {draft.date}, de {draft.start} à {draft.end} ?</p><div><button type="button" className="secondary" disabled={saving} onClick={()=>setDeleting(false)}>Conserver</button><button type="button" className="primary danger-button" disabled={saving} onClick={()=>void removeEntry()}>Confirmer la suppression</button></div></div>}
-          <div className="calendar-modal-actions">{draft.version&&!readOnly&&!deleting&&<button type="button" className="secondary danger-button" disabled={saving} onClick={()=>setDeleting(true)}><Trash2 size={16}/>Supprimer</button>}<button type="button" className="secondary" disabled={saving} onClick={closeDraft}>{readOnly ? 'Fermer' : 'Annuler'}</button>{!readOnly && <button className="primary" disabled={saving || !validTimes || conflict || !draft.client_id}><Check size={18} />{saving ? 'Enregistrement…' : 'Enregistrer la prestation'}</button>}</div>
+          <div className="calendar-modal-actions">{draft.version&&!readOnly&&!deleting&&<button type="button" className="secondary danger-button" disabled={saving} onClick={()=>setDeleting(true)}><Trash2 size={16}/>Supprimer</button>}<button type="button" className="secondary" disabled={saving} onClick={closeDraft}>{readOnly ? 'Fermer' : 'Annuler'}</button>{!readOnly && <button className="primary" disabled={saving || !validTimes || conflict || !draft.client_id || !(ticketSelectionReady(draft) || (!!draft.version && draft.ticket_source === 'legacy'))}><Check size={18} />{saving ? 'Enregistrement…' : 'Enregistrer la prestation'}</button>}</div>
           <p className="form-note">Heures de Bruxelles · Fin 00:00 = minuit · Arrondi au quart d’heure supérieur</p>
         </form>}
       </DialogContent>

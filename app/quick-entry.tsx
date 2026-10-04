@@ -5,12 +5,14 @@ import { Check, Play, Save } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import TimeInput from '@/components/time-input';
 import LocationField from '@/components/location-field';
+import TicketPicker from '@/components/ticket-picker';
 import { brusselsToday, duration } from '@/lib/business';
 import { suggestedTimes } from '@/lib/workday';
 import { browserUuidV4, BROWSER_UUID_UNAVAILABLE_MESSAGE } from '@/lib/browser-uuid';
 import type { EntrySeed, State } from '@/lib/types';
+import { ticketSelectionReady, type TicketSource } from '@/lib/ticket-selection';
 export const draftKey = (id: string) => 'sumatoni-quick-draft-v2:' + id;
-type Draft = Required<EntrySeed> & { id: string };
+type Draft = Required<Omit<EntrySeed, 'ticket_source' | 'glpi_ticket_id'>> & { id: string; ticket_source?: TicketSource; glpi_ticket_id?: number | null };
 export function readDraft(id: string): Draft | null {
   try { const d = JSON.parse(localStorage.getItem(draftKey(id)) || 'null'); return d && ['id','client_id','ticket','description','date','start','end'].every(k => typeof d[k] === 'string') && typeof d.on_site === 'boolean' ? d : null; } catch { return null; }
 }
@@ -49,14 +51,14 @@ export default function QuickEntry({ data, seed, mode, onClose, onSaved }: { dat
     {error && <div className="alert error" role="alert">{error}</div>}
     <form className="quick-form" onSubmit={save}><fieldset disabled={busy}>
       <label>Client <span className="required">*</span><select required autoFocus value={form.client_id} onChange={e => update({ client_id: e.target.value })}><option value="">Choisir un client</option>{data.clients.filter(c => c.active).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-      <label>Ticket <span className="required">*</span><input required maxLength={120} value={form.ticket} placeholder="Ex. GLPI-123 ou INC-042" onChange={e => update({ ticket: e.target.value })} /></label>
-      <div className="span-all"><NewGlpiTicket clients={data.clients} memberId={data.me!.id} initialClient={form.client_id} initialDescription={form.description} disabled={busy} onCreated={ticket=>update({client_id:ticket.client_id||form.client_id,ticket:'GLPI-'+ticket.id,description:form.description||ticket.title})}/></div>
+      <div className="span-all"><TicketPicker clients={data.clients} clientId={form.client_id} value={form} disabled={busy} onChange={value => update(value)} /></div>
+      <div className="span-all"><NewGlpiTicket clients={data.clients} memberId={data.me!.id} initialClient={form.client_id} initialDescription={form.description} disabled={busy} onCreated={ticket=>update({client_id:ticket.client_id||form.client_id,ticket:'GLPI-'+ticket.id,ticket_source:'glpi',glpi_ticket_id:ticket.id,description:form.description||ticket.title})}/></div>
       {mode === 'entry' && <><label className="span-all">Date de l’intervention <span className="required">*</span><input type="date" required max={brusselsToday()} value={form.date} onChange={e => update({ date: e.target.value })} /></label><TimeInput label="Début" value={form.start} onChange={start => update({ start })} /><TimeInput label="Fin" value={form.end} onChange={end => update({ end })} /></>}
       <div className="span-all"><LocationField value={form.on_site} onChange={on_site => update({ on_site })} /></div>
       <label className="span-all">Travail réalisé <span className="optional">facultatif</span><textarea maxLength={2000} rows={3} value={form.description} placeholder="Le contexte utile pour votre relevé…" onChange={e => update({ description: e.target.value })} /></label>
     </fieldset>
     {mode === 'entry' && <div className="duration-preview"><div><span>Temps réel</span><strong>{real > 0 ? duration(real) : '—'}</strong></div><div><span>À facturer</span><strong>{real > 0 ? duration(Math.ceil(real / 15) * 15) : '—'}</strong></div></div>}
-    <div className="quick-actions"><button type="button" className="secondary" disabled={busy} onClick={onClose}>Fermer</button><button className="primary" disabled={busy || (mode === 'entry' && !(real > 0))}>{mode === 'timer' ? <Play size={17} /> : <Check size={17} />}{busy ? 'Enregistrement…' : mode === 'timer' ? 'Démarrer le chronomètre' : 'Enregistrer la prestation'}</button></div>
+    <div className="quick-actions"><button type="button" className="secondary" disabled={busy} onClick={onClose}>Fermer</button><button className="primary" disabled={busy || !ticketSelectionReady(form) || (mode === 'entry' && !(real > 0))}>{mode === 'timer' ? <Play size={17} /> : <Check size={17} />}{busy ? 'Enregistrement…' : mode === 'timer' ? 'Démarrer le chronomètre' : 'Enregistrer la prestation'}</button></div>
     {mode === 'entry' && <p className="draft-note"><Save size={14} />{storageError ? 'Brouillon non conservé : le stockage de ce navigateur est indisponible.' : dirty ? 'Brouillon conservé sur cet appareil jusqu’à l’enregistrement.' : 'Votre brouillon sera conservé sur cet appareil.'}</p>}
     {mode === 'entry' && restored && <button type="button" className="text-button" disabled={busy} onClick={() => setDiscard(true)}>Supprimer le brouillon</button>}{discard && <div className="inline-confirm"><p>Supprimer ce brouillon de cet appareil ?</p><div><button type="button" className="secondary" onClick={() => setDiscard(false)}>Conserver</button><button type="button" className="secondary" onClick={() => { try { localStorage.removeItem(draftKey(data.me!.id)); } catch {} onClose(); }}>Confirmer la suppression</button></div></div>}
     </form></DialogContent></Dialog>;

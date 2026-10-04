@@ -4,6 +4,7 @@ import { LockKeyhole, GripVertical } from 'lucide-react';
 import { adjustedRange, addDays, SLOT_HEIGHT, type CalendarGesture } from '@/lib/calendar';
 import { clockTime, duration, billedMinutes, locationLabel } from '@/lib/business';
 import type { Entry } from '@/lib/types';
+import { ticketBadge } from '@/lib/ticket-selection';
 type Change = { date: string; start: number; end: number };
 type Drag = Change & { x: number; y: number; scroll: number; mode: CalendarGesture; offsetX: number; active: boolean };
 export default function CalendarItem({ entry, lane, lanes, colorStyle, colored, team, disabled, today, onOpen, onChange }: {
@@ -47,7 +48,7 @@ export default function CalendarItem({ entry, lane, lanes, colorStyle, colored, 
  <button type="button" data-entry-id={entry.id} data-calendar-handle="body" className="calendar-event-body" onPointerDown={e=>down(e,'move')} onClick={()=>{if(Date.now()>blockClick.current)onOpen();}}
  title={`${entry.client} · ${entry.ticket}\n${entry.member} · ${locationLabel(entry.on_site)}\n${clockTime(from)}–${clockTime(to)} · ${duration(billedMinutes(from,to))} facturables`}
  aria-label={`${entry.billed?'Consulter':'Modifier'} ${entry.ticket}, ${entry.client}, ${clockTime(from)} à ${clockTime(to)}`}>
- <span>{!!entry.billed&&<LockKeyhole size={12}/>}{clockTime(from)}–{clockTime(to)}</span><span className="calendar-event-details"><strong>{entry.client}</strong><small>{entry.ticket}{team?' · '+entry.member:''}</small></span></button>
+ <span>{!!entry.billed&&<LockKeyhole size={12}/>}{clockTime(from)}–{clockTime(to)}</span><span className="calendar-event-details"><strong>{entry.client}</strong><small>{entry.ticket}{team?' · '+entry.member:''} <span className={`ticket-source ${entry.ticket_source}`}>{ticketBadge(entry.ticket_source)}</span></small></span></button>
  {!locked&&<><button type="button" data-entry-id={entry.id} data-calendar-handle="start" className="calendar-resize-handle start" aria-label={`Ajuster le début de ${entry.ticket}`} title="Début · glisser ou flèches haut/bas" onPointerDown={e=>down(e,'start',true)} onKeyDown={e=>key(e,'start')}/><button type="button" data-entry-id={entry.id} data-calendar-handle="end" className="calendar-resize-handle end" aria-label={`Ajuster la fin de ${entry.ticket}`} title="Fin · glisser ou flèches haut/bas" onPointerDown={e=>down(e,'end',true)} onKeyDown={e=>key(e,'end')}/><button type="button" data-entry-id={entry.id} data-calendar-handle="move" className="calendar-move-handle" aria-label={`Déplacer ${entry.ticket}`} title="Déplacer · glisser ou flèches" onPointerDown={e=>down(e,'move',true)} onKeyDown={e=>key(e,'move')}><GripVertical size={12}/></button></>}
  </div>;
 }

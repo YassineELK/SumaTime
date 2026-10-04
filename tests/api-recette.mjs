@@ -49,13 +49,13 @@ assert.equal((await call(alice)).clients.find(c=>c.id===client_id).color,'#8656C
 await call(admin,{action:'clientColor',id:client_id,color:null});
 assert.equal((await call(alice)).clients.find(c=>c.id===client_id).color,null);checks++;
 const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Brussels', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-const entry = { action: 'saveEntry', id: randomUUID(), client_id, date, ticket: '=FORMULA-TEST', start: '09:00', end: '09:16', description: 'Analyse ; configuration "réseau"\nDeuxième ligne' };
+const entry = { action: 'saveEntry', id: randomUUID(), client_id, date, ticket: 'À compléter', ticket_source: 'pending', glpi_ticket_id: null, start: '09:00', end: '09:16', description: 'Analyse ; configuration "réseau"\nDeuxième ligne' };
 await call(alice, entry);
 await call(alice, entry); // idempotent retry
 let state = await call(alice); assert.equal(state.entries.length, 1); assert.equal(state.members.length, 1); checks += 2;
 const first = state.entries[0]; assert.equal(first.end - first.start, 16); checks++;
 await call(bob, { ...entry, id: randomUUID(), ticket: 'BOB-01' });
-state = await call(bob); assert.equal(state.entries.length, 1); assert.equal(state.entries[0].ticket, 'BOB-01'); checks += 2;
+state = await call(bob); assert.equal(state.entries.length, 1); assert.equal(state.entries[0].ticket, 'À compléter'); checks += 2;
 await call(bob, { ...entry, version: 1, ticket: 'HACK' }, '/api/time', 403);
 await call(bob, { action: 'deleteEntry', id: entry.id, version: 1 }, '/api/time', 403);
 await call(alice, { action: 'billed', id: entry.id, version: 1, billed: true }, '/api/time', 403);
@@ -65,7 +65,8 @@ await call(alice, { ...entry, id: randomUUID(), start: '09:15', end: '10:00' }, 
 await call(alice, { ...entry, id: randomUUID(), start: '10:00', end: '09:00' }, '/api/time', 400);
 await call(alice, { ...entry, id: randomUUID(), date: '2026-02-30' }, '/api/time', 400);
 await call(alice, { ...entry, id: randomUUID(), date: '2099-01-01' }, '/api/time', 400);
-await call(alice, { ...entry, id: randomUUID(), ticket: '  ' }, '/api/time', 400);
+const rejectedTicket = await call(alice, { ...entry, id: randomUUID(), ticket_source: undefined }, '/api/time', 400);
+assert.equal(rejectedTicket.code, 'TICKET_SELECTION_REQUIRED'); checks++;
 await call(alice, { ...entry, id: randomUUID(), start: '25:00' }, '/api/time', 400);
 await call(alice, { ...entry, id: randomUUID() }, '/api/time', 403, 'https://foreign.invalid');
 const midnight = { ...entry, id: randomUUID(), ticket: 'MINUIT', start: '23:00', end: '00:00' };
@@ -82,14 +83,14 @@ const undoPayload = restoreEntryPayload({ id: undoEntry.id, version: 2, original
 assert.deepEqual(undoPayload, { action: 'restoreEntryRange', id: undoEntry.id, version: 2, date, start: '06:00', end: '06:16' });
 await call(alice, undoPayload);
 let undoState = (await call(alice)).entries.find(value => value.id === undoEntry.id);
-assert.equal(undoState.ticket, 'CURRENT'); assert.equal(undoState.description, 'Changement courant'); assert.equal(undoState.start, 360); assert.equal(undoState.end, 376); checks += 4;
+assert.equal(undoState.ticket, 'À compléter'); assert.equal(undoState.description, 'Changement courant'); assert.equal(undoState.start, 360); assert.equal(undoState.end, 376); checks += 4;
 await call(alice, { ...undoEntry, version: 3, start: '08:00', end: '08:16', ticket: 'CONCURRENT', description: 'Modification concurrente' });
 await call(alice, restoreEntryPayload({ id: undoEntry.id, version: 3, original: { date, start: 360, end: 376 } }), '/api/time', 409);
 undoState = (await call(alice)).entries.find(value => value.id === undoEntry.id);
-assert.equal(undoState.ticket, 'CONCURRENT'); assert.equal(undoState.start, 480); checks += 2;
+assert.equal(undoState.ticket, 'À compléter'); assert.equal(undoState.start, 480); checks += 2;
 await call(alice, { action: 'deleteEntry', id: undoEntry.id, version: 4 });
 const detail = await call(admin, null, `/api/time?from=${date}&to=${date}&export=detail`);
-assert.ok(detail.includes('"16";"30";"0,50"')); assert.ok(detail.includes("'=FORMULA-TEST")); checks += 2;
+assert.ok(detail.includes('"16";"30";"0,50"')); assert.ok(detail.includes('"À compléter";"À compléter"')); checks += 2;
 const sum = await call(admin, null, `/api/time?from=${date}&to=${date}&export=summary`);
 assert.equal((sum.match(/"0,50"/g) || []).length, 2); checks++;
 const privateCsv = await call(alice, null, `/api/time?from=${date}&to=${date}&member=${initial.me.id}&export=detail`);
@@ -136,7 +137,7 @@ assert.ok(clientCsv.split('\r\n').every(line=>line.split(';').length===4));check
 const ownClientCsv=await call(alice,null,`/api/time?from=${date}&to=${date}&client=${client_id}&export=client`);
 assert.ok(!ownClientCsv.includes('"14:00"'));checks++;
 const moneyDetail=await call(admin,null,`/api/time?from=${date}&to=${date}&client=${client_id}&export=detail`);
-assert.equal(moneyDetail.split('\r\n')[0].split(';').length,17);
+assert.equal(moneyDetail.split('\r\n')[0].split(';').length,18);
 assert.ok(moneyDetail.includes('"100,00";"50,00";"Oui";"20,00"'));checks+=2;
 const onsiteSummary=await call(admin,null,`/api/time?from=${date}&to=${date}&client=${client_id}&member=${aliceId}&export=summary`);
 assert.ok(onsiteSummary.includes('"Sur site";"2";"46";"60";"1,00";"105,00";"1";"20,00"'));checks++;
@@ -159,7 +160,7 @@ await call(admin,null,`/api/time?from=2020-01-01&to=2020-01-01&member=${aliceId}
 const partnerCsv = await call(admin,null,partnerQuery);
 assert.equal(partnerCsv.split('\r\n')[0].split(';').length,14);
 assert.ok(!/Bob|BOB-01|SITE-BOB|Tarif horaire|Montant prestations/.test(partnerCsv));
-assert.ok(partnerCsv.includes("'=FORMULA-TEST"));
+assert.ok(partnerCsv.includes('À compléter'));
 assert.ok(partnerCsv.endsWith('"Alice recette";"TOTAL";"";"";"";"";"5 prestation(s)";"";"92";"120";"2,00";"2";"50,00";""'));
 assert.ok(partnerCsv.indexOf('"09:00"') < partnerCsv.indexOf('"11:00"'));
 checks+=5;

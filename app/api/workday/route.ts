@@ -3,10 +3,12 @@ import { sqlite, transaction } from '@/db/raw';
 import { brusselsToday, parseTime } from '@/lib/business';
 import { timerSegments } from '@/lib/workday';
 import type { WorkTimer } from '@/lib/types';
+import { validateGlpiTicketSelection } from '@/lib/glpi';
+import { PENDING_TICKET_LABEL, validGlpiTicketId } from '@/lib/ticket-selection';
 export const dynamic = 'force-dynamic';
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
 async function who() { const me = await getMember(); if (!me) throw new AuthError('Reconnectez-vous pour continuer.', 401); if (me.must_change) throw new AuthError('Changez votre mot de passe provisoire.', 403); return me; }
-function fail(error: unknown) { return json({ error: error instanceof AuthError ? error.message : 'Action impossible. Votre chronomètre est conservé ; actualisez et réessayez.' }, error instanceof AuthError ? error.status : 503); }
+function fail(error: unknown) { return json({ error: error instanceof AuthError ? error.message : 'Action impossible. Votre chronomètre est conservé ; actualisez et réessayez.', ...(error instanceof AuthError && error.code ? { code: error.code } : {}) }, error instanceof AuthError ? error.status : 503); }
 function current(member: string) { return sqlite().prepare('SELECT t.*,c.name AS client,c.color FROM work_timers t JOIN clients c ON c.id=t.client_id WHERE member_id=?').get(member) as WorkTimer | undefined; }
 function preview(timer: WorkTimer | undefined) {
   if (!timer?.stopped_at) return { timer: timer || null, segments: [], warning: '' };
@@ -35,13 +37,28 @@ export async function POST(request: Request) {
     const now = Date.now();
     if (body.action === 'start') {
       if (typeof body.id !== 'string' || !/^[a-f0-9-]{36}$/.test(body.id)) throw new AuthError('Identifiant invalide.');
-      if (typeof body.client_id !== 'string' || typeof body.ticket !== 'string' || !body.ticket.trim() || body.ticket.trim().length > 120 || typeof body.description !== 'string' || body.description.length > 2000 || typeof body.on_site !== 'boolean') throw new AuthError('Choisissez un client, un ticket et le mode de prestation.');
+      if (typeof body.client_id !== 'string' || typeof body.description !== 'string' || body.description.length > 2000 || typeof body.on_site !== 'boolean') throw new AuthError('Choisissez un client, un ticket et le mode de prestation.');
+      const existing = current(me.id);
+      const claimedTicket = body.ticket_source === 'pending' && body.glpi_ticket_id == null ? PENDING_TICKET_LABEL
+        : body.ticket_source === 'glpi' && validGlpiTicketId(body.glpi_ticket_id) ? `GLPI-${body.glpi_ticket_id}` : '';
+      if (existing) {
+        if (existing.id === body.id && existing.client_id === body.client_id && existing.ticket === claimedTicket && existing.ticket_source === body.ticket_source && existing.glpi_ticket_id === (body.glpi_ticket_id ?? null) && existing.description === body.description && existing.on_site === Number(body.on_site)) return json(preview(existing));
+        throw new AuthError('Un chronomètre est déjà présent. Terminez-le avant d’en commencer un autre.', 409);
+      }
+      if (sqlite().prepare('SELECT id FROM timer_receipts WHERE id=?').get(body.id)) throw new AuthError('Ce chronomètre a déjà été enregistré.', 409);
+      let ticket: string, ticketSource: 'glpi' | 'pending', glpiTicketId: number | null;
+      if (body.ticket_source === 'pending' && body.glpi_ticket_id == null) {
+        ticket = PENDING_TICKET_LABEL; ticketSource = 'pending'; glpiTicketId = null;
+      } else if (body.ticket_source === 'glpi' && validGlpiTicketId(body.glpi_ticket_id)) {
+        const verified = await validateGlpiTicketSelection(me.id, body.glpi_ticket_id, body.client_id);
+        ticket = verified.ticket; ticketSource = 'glpi'; glpiTicketId = verified.glpi_ticket_id;
+      } else throw new AuthError('Sélectionnez un ticket GLPI proposé ou choisissez explicitement « À compléter ».', 400, { code: 'TICKET_SELECTION_REQUIRED', retryable: false, preserveOperation: true });
       transaction(db => {
-        const existing = current(me.id);
-        if (existing) { if (existing.id === body.id && existing.client_id === body.client_id && existing.ticket === body.ticket.trim() && existing.description === body.description && existing.on_site === Number(body.on_site)) return; throw new AuthError('Un chronomètre est déjà présent. Terminez-le avant d’en commencer un autre.', 409); }
+        const live = current(me.id);
+        if (live) { if (live.id === body.id && live.client_id === body.client_id && live.ticket === ticket && live.ticket_source === ticketSource && live.glpi_ticket_id === glpiTicketId && live.description === body.description && live.on_site === Number(body.on_site)) return; throw new AuthError('Un chronomètre est déjà présent. Terminez-le avant d’en commencer un autre.', 409); }
         if (db.prepare('SELECT id FROM timer_receipts WHERE id=?').get(body.id)) throw new AuthError('Ce chronomètre a déjà été enregistré.', 409);
         if (!db.prepare('SELECT id FROM clients WHERE id=? AND active=1').get(body.client_id)) throw new AuthError('Choisissez un client actif.');
-        db.prepare('INSERT INTO work_timers (member_id,id,client_id,ticket,description,on_site,started_at) VALUES (?,?,?,?,?,?,?)').run(me.id, body.id, body.client_id, body.ticket.trim(), body.description, Number(body.on_site), now);
+        db.prepare('INSERT INTO work_timers (member_id,id,client_id,ticket,ticket_source,glpi_ticket_id,description,on_site,started_at) VALUES (?,?,?,?,?,?,?,?,?)').run(me.id, body.id, body.client_id, ticket, ticketSource, glpiTicketId, body.description, Number(body.on_site), now);
       });
     } else {
       if (typeof body.id !== 'string') throw new AuthError('Chronomètre invalide.');
@@ -79,7 +96,7 @@ export async function POST(request: Request) {
           for (const segment of segments) {
             if (db.prepare('SELECT id FROM entries WHERE member_id=? AND date=? AND start<? AND end>?').get(me.id, segment.date, segment.end, segment.start)) throw new AuthError(`Un créneau du ${segment.date} chevauche une prestation existante. Corrigez le relevé ou saisissez les horaires manuellement. Le chronomètre est conservé.`, 409);
             const id = crypto.randomUUID(); ids.push(id);
-            db.prepare('INSERT INTO entries (id,member_id,client_id,ticket,date,start,end,description,billed,on_site,hourly_rate_cents,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,0,?,?,1,?,?)').run(id,me.id,timer.client_id,timer.ticket,segment.date,segment.start,segment.end,body.description,timer.on_site,rate,created,created);
+            db.prepare('INSERT INTO entries (id,member_id,client_id,ticket,ticket_source,glpi_ticket_id,date,start,end,description,billed,on_site,hourly_rate_cents,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,1,?,?)').run(id,me.id,timer.client_id,timer.ticket,timer.ticket_source,timer.glpi_ticket_id,segment.date,segment.start,segment.end,body.description,timer.on_site,rate,created,created);
             if (timer.on_site) db.prepare('INSERT OR IGNORE INTO travel_days (member_id,client_id,date,fee_cents,anchor_entry_id) SELECT ?,?,?,travel_fee_cents,? FROM members WHERE id=?').run(me.id,timer.client_id,segment.date,id,me.id);
           }
           db.prepare('INSERT INTO timer_receipts VALUES (?,?,?,?)').run(timer.id,me.id,JSON.stringify(ids),created);

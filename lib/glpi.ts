@@ -17,7 +17,7 @@ function now() { return glpiClock(); }
 function nowIso() { return new Date(now()).toISOString(); }
 
 type Config = { api: string; web: string; appToken: string };
-export type GlpiTicket = { id: number; title: string; status: number; entity: number; url: string; client_id: string | null; client: string | null };
+export type GlpiTicket = { id: number; title: string; status: number; entity: number; url: string; client_id: string | null; client: string | null; client_active?: number | null };
 type JsonObject = Record<string, unknown>;
 type GlpiGet = (path: string) => Promise<unknown>;
 type GlpiPost = (path: string, payload: unknown) => Promise<unknown>;
@@ -85,7 +85,9 @@ export type GlpiFailureCode =
   | 'INTENT_EXPIRED'
   | 'INTENT_CONSUMED'
   | 'INTENT_ABANDONED'
-  | 'OPERATION_CONFLICT';
+  | 'OPERATION_CONFLICT'
+  | 'TICKET_SELECTION_REQUIRED'
+  | 'TICKET_CLIENT_MISMATCH';
 
 export class GlpiCreationTerminal extends AuthError {
   public intentConsumed = false;
@@ -107,6 +109,7 @@ async function request(config: Config, path: string, headers: Record<string, str
       const bodyText = (() => {
         try { return JSON.stringify(body); } catch { return ''; }
       })();
+      if (method === 'GET' && /^Ticket\/\d+$/.test(path) && response.status === 404) throw new AuthError('Ce ticket GLPI est introuvable ou inaccessible avec votre compte.', 400, { code: 'TICKET_SELECTION_REQUIRED', retryable: false, preserveOperation: true });
       // Only an explicit provider business code is terminal. HTTP status
       // alone is deliberately insufficient: 401/403/404/405, malformed
       // bodies and infrastructure failures preserve the operation.
@@ -156,7 +159,7 @@ export async function glpiTickets(member: string, config: Config, query: string,
     if (!idField || !nameField || !statusField) throw new AuthError('Les champs de recherche GLPI sont incompatibles avec ce connecteur.', 502, { code: 'GLPI_RESPONSE_INVALID', retryable: true, preserveOperation: true });
     const params = new URLSearchParams({ range: `${page * 10}-${page * 10 + 9}`, sort: idField, order: 'DESC', 'forcedisplay[0]': idField, rawdata: 'false', uid_cols: 'false', giveItems: 'false' });
     let index = 0;
-    if (query) { params.set(`criteria[${index}][field]`, /^\d+$/.test(query) ? idField : nameField); params.set(`criteria[${index}][searchtype]`, 'contains'); params.set(`criteria[${index}][value]`, /^\d+$/.test(query) ? '^' + query + '$' : query); index++; }
+    if (query) { params.set(`criteria[${index}][field]`, /^\d+$/.test(query) ? idField : nameField); params.set(`criteria[${index}][searchtype]`, 'contains'); params.set(`criteria[${index}][value]`, /^\d+$/.test(query) ? '^' + query : query); index++; }
     if (open) { params.set(`criteria[${index}][link]`, 'AND'); params.set(`criteria[${index}][field]`, statusField); params.set(`criteria[${index}][searchtype]`, 'equals'); params.set(`criteria[${index}][value]`, 'notold'); }
     const result = objectOrThrow(await get('search/Ticket?' + params), 'La réponse de GLPI est inattendue.');
     const total = integer(result.totalcount);
@@ -175,10 +178,27 @@ export async function glpiTickets(member: string, config: Config, query: string,
       const ticket = objectOrThrow(await get('Ticket/' + id), 'GLPI a renvoyé un ticket invalide.');
       const ticketId = integer(ticket.id), status = integer(ticket.status), entity = integer(ticket.entities_id);
       if (ticketId !== id || typeof ticket.name !== 'string' || status === null || entity === null) throw new AuthError('GLPI a renvoyé un ticket invalide.', 502, { code: 'GLPI_RESPONSE_INVALID', retryable: true, preserveOperation: true });
-      const client = sqlite().prepare('SELECT id,name FROM clients WHERE glpi_entity_id=? AND active=1').get(entity) as { id: string; name: string } | undefined;
-      tickets.push({ id, title: ticket.name.slice(0, 1000), status, entity, url: config.web + '/front/ticket.form.php?id=' + id, client_id: client?.id || null, client: client?.name || null });
+      const client = sqlite().prepare('SELECT id,name,active FROM clients WHERE glpi_entity_id=?').get(entity) as { id: string; name: string; active: number } | undefined;
+      tickets.push({ id, title: ticket.name.slice(0, 1000), status, entity, url: config.web + '/front/ticket.form.php?id=' + id, client_id: client?.id || null, client: client?.name || null, client_active: client?.active ?? null });
     }
     return { tickets, total, page };
+  });
+}
+
+export async function validateGlpiTicketSelection(member: string, ticketId: number, clientId: string) {
+  const config = glpiConfig();
+  if (!config) throw new AuthError('La validation du ticket GLPI est indisponible. Connectez GLPI ou choisissez explicitement « À compléter ».', 503, { code: 'CONFIG_NOT_READY', retryable: true, preserveOperation: true });
+  if (!hasGlpiToken(member, config)) throw new AuthError('Connectez votre compte GLPI ou choisissez explicitement « À compléter ».', 409, { code: 'GLPI_AUTH_REQUIRED', retryable: true, preserveOperation: true });
+  return session(config, tokenFor(member, config), async get => {
+    let raw: unknown;
+    try { raw = await get('Ticket/' + ticketId); }
+    catch (error) { if (error instanceof AuthError && ['TICKET_SELECTION_REQUIRED', 'GLPI_ACCESS_DENIED'].includes(error.code || '')) throw new AuthError('Ce ticket GLPI est introuvable ou inaccessible avec votre compte.', 400, { code: 'TICKET_SELECTION_REQUIRED', retryable: false, preserveOperation: true }); throw error; }
+    const ticket = object(raw);
+    const id = integer(ticket?.id), status = integer(ticket?.status), entity = integer(ticket?.entities_id);
+    if (id !== ticketId || status === null || entity === null || typeof ticket?.name !== 'string') throw new AuthError('Ce ticket GLPI est introuvable ou inaccessible avec votre compte.', 400, { code: 'TICKET_SELECTION_REQUIRED', retryable: false, preserveOperation: true });
+    const client = sqlite().prepare('SELECT id,active,glpi_entity_id FROM clients WHERE id=?').get(clientId) as { id: string; active: number; glpi_entity_id: number | null } | undefined;
+    if (!client || !client.active || client.glpi_entity_id !== entity) throw new AuthError('Le ticket GLPI ne correspond pas au client actif sélectionné.', 409, { code: 'TICKET_CLIENT_MISMATCH', retryable: false, preserveOperation: true });
+    return { ticket: `GLPI-${ticketId}`, ticket_source: 'glpi' as const, glpi_ticket_id: ticketId, title: ticket.name.slice(0, 1000), status, entity };
   });
 }
 

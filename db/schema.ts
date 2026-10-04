@@ -14,6 +14,7 @@ export const clients = sqliteTable('clients', {
 export const entries = sqliteTable('entries', {
   id: text('id').primaryKey(), memberId: text('member_id').notNull().references(() => members.id),
   clientId: text('client_id').notNull().references(() => clients.id), ticket: text('ticket').notNull(),
+  ticketSource: text('ticket_source').notNull().default('legacy'), glpiTicketId: integer('glpi_ticket_id'),
   date: text('date').notNull(), start: integer('start').notNull(), end: integer('end').notNull(),
   description: text('description').notNull().default(''), billed: integer('billed').notNull().default(0),
   onSite: integer('on_site'), hourlyRateCents: integer('hourly_rate_cents'),

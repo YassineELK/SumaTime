@@ -4,6 +4,7 @@ import { JSDOM } from 'jsdom';
 import React, { act, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import TimeCalendar from '../app/time-calendar.tsx';
+import { brusselsToday } from '../lib/business.ts';
 
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'http://127.0.0.1:5174/' });
 for (const name of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLButtonElement', 'Node', 'Element', 'DocumentFragment', 'MutationObserver', 'getComputedStyle']) {
@@ -17,7 +18,7 @@ if (!globalThis.crypto?.randomUUID) Object.defineProperty(globalThis, 'crypto', 
 
 const client = { id: 'client-1', name: 'Client DOM', active: 1, color: null, glpi_entity_id: null, hourly_rate_cents: null, onsite_hourly_rate_cents: null };
 const member = { id: 'member-1', user_id: 'member-1', email: 'dom@example.test', name: 'DOM Tester', role: 'partner', active: 1, travel_fee_cents: null, provider: null, login: null };
-const initialEntry = { id: '11111111-1111-1111-1111-111111111111', member_id: member.id, client_id: client.id, client: client.name, member: member.name, ticket: 'DOM-FOCUS', date: '2026-10-02', start: 600, end: 660, description: '', on_site: 0, hourly_rate_cents: null, travel_cents: null, travel_counted: 0, billed: 0, version: 1 };
+const initialEntry = { id: '11111111-1111-1111-1111-111111111111', member_id: member.id, client_id: client.id, client: client.name, member: member.name, ticket: 'DOM-FOCUS', ticket_source: 'legacy', glpi_ticket_id: null, date: brusselsToday(), start: 600, end: 660, description: '', on_site: 0, hourly_rate_cents: null, travel_cents: null, travel_counted: 0, billed: 0, version: 1 };
 let serverEntry = { ...initialEntry };
 const posts = [];
 

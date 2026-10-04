@@ -5,6 +5,8 @@ import { database } from '@/db/raw';
 import { billedMinutes, brusselsToday, clockTime, csv, locationLabel, parseTime, validDate } from '@/lib/business';
 import type { Member, Entry } from '@/lib/types';
 import { partnerStatement } from '@/lib/partner-export';
+import { validateGlpiTicketSelection } from '@/lib/glpi';
+import { PENDING_TICKET_LABEL, validGlpiTicketId, type TicketSource } from '@/lib/ticket-selection';
 
 export const dynamic = 'force-dynamic';
 class HttpError extends Error { constructor(message: string, public status = 400) { super(message); } }
@@ -46,7 +48,7 @@ async function entriesFor(url: URL, member: Member) {
   return { rows: result.results, ...f };
 }
 function fail(error: unknown) {
-  if (error instanceof HttpError || error instanceof AuthError) return response({ error: error.message }, error.status);
+  if (error instanceof HttpError || error instanceof AuthError) return response({ error: error.message, ...('code' in error && error.code ? { code: error.code } : {}) }, error.status);
   console.error('Time API failure', error instanceof Error ? error.message : 'unknown');
   return response({ error: 'Le service est momentanément indisponible. Vos champs sont conservés ; réessayez.' }, 503);
 }
@@ -89,7 +91,7 @@ export async function GET(request: Request) {
           groups.set(key, item);
         }
         table = [['Client', 'Partenaire', 'Mode de prestation', 'Prestations', 'Minutes réelles', 'Minutes facturables', 'Heures facturables', 'Montant prestations EUR', 'Déplacements', 'Forfait prestataire EUR'], ...[...groups.values()].map(g => [g.client, g.member, g.mode, g.count, g.real, g.bill, (g.bill / 60).toFixed(2).replace('.', ','), g.missingRate ? '' : (g.amount / 100).toFixed(2).replace('.', ','), g.trips, g.missingFee ? '' : (g.travel / 100).toFixed(2).replace('.', ',')])];
-      } else table = [['ID', 'Client', 'Ticket', 'Partenaire', 'Date', 'Début', 'Fin', 'Description', 'Minutes réelles', 'Minutes facturables', 'Heures facturables', 'Statut', 'Mode de prestation', 'Tarif horaire EUR', 'Montant prestations EUR', 'Déplacement compté', 'Forfait prestataire EUR'], ...rows.map(e => [e.id, e.client, e.ticket, e.member, e.date, clockTime(e.start), clockTime(e.end), e.description, e.end - e.start, billedMinutes(e.start, e.end), (billedMinutes(e.start, e.end) / 60).toFixed(2).replace('.', ','), e.billed ? 'Facturé' : 'À facturer', locationLabel(e.on_site), e.hourly_rate_cents === null ? '' : (e.hourly_rate_cents / 100).toFixed(2).replace('.', ','), serviceAmount(e.start, e.end, e.hourly_rate_cents) === null ? '' : (serviceAmount(e.start, e.end, e.hourly_rate_cents)! / 100).toFixed(2).replace('.', ','), e.travel_counted ? 'Oui' : 'Non', e.travel_cents === null ? '' : (e.travel_cents / 100).toFixed(2).replace('.', ',')])];
+      } else table = [['ID', 'Client', 'Ticket', 'Source ticket', 'Partenaire', 'Date', 'Début', 'Fin', 'Description', 'Minutes réelles', 'Minutes facturables', 'Heures facturables', 'Statut', 'Mode de prestation', 'Tarif horaire EUR', 'Montant prestations EUR', 'Déplacement compté', 'Forfait prestataire EUR'], ...rows.map(e => [e.id, e.client, e.ticket, e.ticket_source === 'glpi' ? 'GLPI vérifié' : e.ticket_source === 'pending' ? PENDING_TICKET_LABEL : 'Historique', e.member, e.date, clockTime(e.start), clockTime(e.end), e.description, e.end - e.start, billedMinutes(e.start, e.end), (billedMinutes(e.start, e.end) / 60).toFixed(2).replace('.', ','), e.billed ? 'Facturé' : 'À facturer', locationLabel(e.on_site), e.hourly_rate_cents === null ? '' : (e.hourly_rate_cents / 100).toFixed(2).replace('.', ','), serviceAmount(e.start, e.end, e.hourly_rate_cents) === null ? '' : (serviceAmount(e.start, e.end, e.hourly_rate_cents)! / 100).toFixed(2).replace('.', ','), e.travel_counted ? 'Oui' : 'Non', e.travel_cents === null ? '' : (e.travel_cents / 100).toFixed(2).replace('.', ',')])];
       return new Response(csv(table), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="sumatoni-${kind === 'partner' ? 'releve-partenaire' : clientExport ? 'releve-client' : summary ? 'synthese' : 'detail'}-${from}-${to}.csv"`, 'Cache-Control': 'no-store' } });
     }
     const [clients, members] = await Promise.all([
@@ -164,7 +166,8 @@ export async function POST(request: Request) {
     } else if (body.action === 'saveEntry') {
       const id = text(body.id, 'L’identifiant', 60);
       if (!/^[a-f0-9-]{36}$/.test(id)) throw new HttpError('Identifiant non valide.');
-      const clientId = text(body.client_id, 'Le client'), ticket = text(body.ticket, 'Le ticket');
+      const clientId = text(body.client_id, 'Le client');
+      const submittedTicket = typeof body.ticket === 'string' ? body.ticket.trim() : '';
       const date = text(body.date, 'La date', 10);
       if (!validDate(date) || date > brusselsToday()) throw new HttpError('La date doit être valide et ne peut pas être future.');
       let start: number, end: number;
@@ -177,22 +180,46 @@ export async function POST(request: Request) {
       if (!existing && body.on_site === null) throw new HttpError('Indiquez le mode de prestation.');
       const onSite = body.on_site === undefined ? (existing ? existing.on_site : 0) : body.on_site === null ? null : Number(body.on_site);
       if (existing && existing.member_id !== member.id && member.role !== 'admin') throw new HttpError('Prestation inaccessible.', 403);
+      const claimedSource = body.ticket_source as TicketSource | undefined;
+      const claimedGlpiId = body.glpi_ticket_id;
+      const claimedTicket = claimedSource === 'pending' && claimedGlpiId == null ? PENDING_TICKET_LABEL
+        : claimedSource === 'glpi' && validGlpiTicketId(claimedGlpiId) ? `GLPI-${claimedGlpiId}`
+          : claimedSource === 'legacy' && claimedGlpiId == null ? submittedTicket : '';
       if (existing && !body.version) {
-        if (existing.member_id === member.id && existing.client_id === clientId && existing.ticket === ticket && existing.date === date && existing.start === start && existing.end === end && existing.description === description && existing.on_site === onSite) return response({ ok: true });
+        if (existing.member_id === member.id && existing.client_id === clientId && existing.ticket === claimedTicket && existing.ticket_source === claimedSource && existing.glpi_ticket_id === (claimedGlpiId ?? null) && existing.date === date && existing.start === start && existing.end === end && existing.description === description && existing.on_site === onSite) return response({ ok: true });
         throw new HttpError('Cet enregistrement existe déjà. Actualisez la liste.', 409);
       }
       if (body.version && !existing) throw new HttpError('Cette prestation a été supprimée. Actualisez la liste.', 409);
       if (existing && (!Number.isInteger(body.version) || body.version < 1)) throw new HttpError('Version non valide.');
       if (existing?.billed) throw new HttpError('Cette prestation est facturée. Un administrateur doit d’abord la rouvrir.', 409);
+      const unchangedIdentity = !!existing && existing.client_id === clientId && existing.ticket === claimedTicket && existing.ticket_source === claimedSource && existing.glpi_ticket_id === (claimedGlpiId ?? null);
+      let ticket: string, ticketSource: TicketSource, glpiTicketId: number | null;
+      if (unchangedIdentity) {
+        ticket = existing.ticket; ticketSource = existing.ticket_source; glpiTicketId = existing.glpi_ticket_id;
+      } else if (claimedSource === 'pending' && claimedGlpiId == null) {
+        ticket = PENDING_TICKET_LABEL; ticketSource = 'pending'; glpiTicketId = null;
+      } else if (claimedSource === 'glpi' && validGlpiTicketId(claimedGlpiId)) {
+        const verified = await validateGlpiTicketSelection(member.id, claimedGlpiId, clientId);
+        ticket = verified.ticket; ticketSource = verified.ticket_source; glpiTicketId = verified.glpi_ticket_id;
+      } else {
+        throw new AuthError('Sélectionnez un ticket GLPI proposé ou choisissez explicitement « À compléter ».', 400, { code: 'TICKET_SELECTION_REQUIRED', retryable: false, preserveOperation: true });
+      }
       const client = await db.prepare('SELECT active,hourly_rate_cents,onsite_hourly_rate_cents FROM clients WHERE id=?').bind(clientId).first<{ active: number; hourly_rate_cents: number | null; onsite_hourly_rate_cents: number | null }>();
       if (!client || (!client.active && existing?.client_id !== clientId)) throw new HttpError('Choisissez un client actif.');
       const owner = existing?.member_id || member.id;
       const overlap = 'NOT EXISTS (SELECT 1 FROM entries WHERE member_id=? AND date=? AND start<? AND end>? AND id<>?)';
       const hourlyRate = existing && existing.client_id === clientId && existing.on_site === onSite ? existing.hourly_rate_cents : onSite === null ? null : onSite ? client.onsite_hourly_rate_cents ?? client.hourly_rate_cents : client.hourly_rate_cents;
       const result = transaction(tx => {
+        if (!existing) {
+          const live = tx.prepare('SELECT * FROM entries WHERE id=?').get(id) as Entry | undefined;
+          if (live) {
+            if (live.member_id === owner && live.client_id === clientId && live.ticket === ticket && live.ticket_source === ticketSource && live.glpi_ticket_id === glpiTicketId && live.date === date && live.start === start && live.end === end && live.description === description && live.on_site === onSite) return { meta: { changes: 1 } };
+            throw new HttpError('Cet enregistrement existe déjà. Actualisez la liste.', 409);
+          }
+        }
         const changed = existing
-          ? tx.prepare(`UPDATE entries SET client_id=?,ticket=?,date=?,start=?,end=?,description=?,on_site=?,hourly_rate_cents=?,updated_at=?,version=version+1 WHERE id=? AND version=? AND billed=0 AND ${overlap}`).run(clientId, ticket, date, start, end, description, onSite, hourlyRate, now, id, body.version, owner, date, end, start, id)
-          : tx.prepare(`INSERT INTO entries (id,member_id,client_id,ticket,date,start,end,description,on_site,hourly_rate_cents,billed,version,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,0,1,?,? WHERE ${overlap}`).run(id, owner, clientId, ticket, date, start, end, description, onSite, hourlyRate, now, now, owner, date, end, start, id);
+          ? tx.prepare(`UPDATE entries SET client_id=?,ticket=?,ticket_source=?,glpi_ticket_id=?,date=?,start=?,end=?,description=?,on_site=?,hourly_rate_cents=?,updated_at=?,version=version+1 WHERE id=? AND version=? AND billed=0 AND ${overlap}`).run(clientId, ticket, ticketSource, glpiTicketId, date, start, end, description, onSite, hourlyRate, now, id, body.version, owner, date, end, start, id)
+          : tx.prepare(`INSERT INTO entries (id,member_id,client_id,ticket,ticket_source,glpi_ticket_id,date,start,end,description,on_site,hourly_rate_cents,billed,version,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,? WHERE ${overlap}`).run(id, owner, clientId, ticket, ticketSource, glpiTicketId, date, start, end, description, onSite, hourlyRate, now, now, owner, date, end, start, id);
         if (changed.changes && onSite === 1) tx.prepare('INSERT OR IGNORE INTO travel_days (member_id,client_id,date,fee_cents,anchor_entry_id) SELECT ?,?,?,travel_fee_cents,? FROM members WHERE id=?').run(owner, clientId, date, id, owner);
         return { meta: { changes: Number(changed.changes) } };
       });

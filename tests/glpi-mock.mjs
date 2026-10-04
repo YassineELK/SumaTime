@@ -43,7 +43,7 @@ export async function mockGlpi(port=8790,allowedEntities=[4,9]) {
     if(path==='search/Ticket'){
       if(user==='broken-test-token')return send(200,{oops:'unexpected'});
       let selected=permitted;
-      for(let i=0;i<2;i++){const field=url.searchParams.get(`criteria[${i}][field]`),value=url.searchParams.get(`criteria[${i}][value]`);if(field==='12')selected=selected.filter(t=>t.status<5);if(field==='1')selected=selected.filter(t=>t.name.toLowerCase().includes(value.toLowerCase()));if(field==='2')selected=selected.filter(t=>String(t.id)===value.replaceAll('^','').replaceAll('$',''));}
+      for(let i=0;i<2;i++){const field=url.searchParams.get(`criteria[${i}][field]`),value=url.searchParams.get(`criteria[${i}][value]`);if(field==='12')selected=selected.filter(t=>t.status<5);if(field==='1')selected=selected.filter(t=>t.name.toLowerCase().includes(value.toLowerCase()));if(field==='2')selected=selected.filter(t=>value.startsWith('^')&&!value.endsWith('$')?String(t.id).startsWith(value.slice(1)):String(t.id)===value.replaceAll('^','').replaceAll('$',''));}
       const offset=Number((url.searchParams.get('range')||'0-9').split('-')[0]);
       return send(200,{totalcount:selected.length,data:selected.slice(offset,offset+10).map(t=>({'Ticket.id':t.id,'Ticket.name':t.name}))});
     }

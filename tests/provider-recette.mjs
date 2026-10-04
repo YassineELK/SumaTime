@@ -30,16 +30,17 @@ await call(admin,{action:'clientGlpi',id:other.id,entity:4},'/api/time',400);
 await call(admin,{action:'clientGlpi',id:other.id,entity:-1},'/api/time',400);
 await call(admin,{action:'clientGlpi',id:other.id,entity:0},'/api/time');await call(admin,{action:'clientGlpi',id:other.id,entity:null},'/api/time');
 const db=new DatabaseSync(process.env.DATABASE_PATH);db.exec('PRAGMA busy_timeout=5000');
-const timer={action:'start',id:randomUUID(),client_id:client.id,ticket:'TIMER-1',description:'Travail avec reprise',on_site:true};
+const timer={action:'start',id:randomUUID(),client_id:client.id,ticket:'À compléter',ticket_source:'pending',glpi_ticket_id:null,description:'Travail avec reprise',on_site:true};
 await call(alice,timer,'/api/workday',403,'https://foreign.invalid');
 await call(alice,{...timer,on_site:'yes'},'/api/workday',400);
 await call(alice,timer);await call(alice,timer);
-await call(alice,{...timer,ticket:'DIFFERENT'},'/api/workday',409);
+await call(alice,{...timer,ticket_source:undefined},'/api/workday',409);
 await call(alice,{...timer,id:randomUUID()},'/api/workday',409);
 equal((await call(bob)).timer,null);equal((await call(admin)).timer,null);
 await call(bob,{action:'stop',id:timer.id},'/api/workday',409);
 await call(alice,{action:'save',id:timer.id,version:1,description:''},'/api/workday',400);
 // Deterministic past interval, 2026-09-15 10:00–10:16 Brussels.
+db.prepare("UPDATE work_timers SET ticket='TIMER-LEGACY',ticket_source='legacy',glpi_ticket_id=NULL WHERE id=?").run(timer.id);
 db.prepare('UPDATE work_timers SET started_at=?,stopped_at=? WHERE id=?').run(Date.parse('2026-09-15T08:00:01Z'),Date.parse('2026-09-15T08:15:20Z'),timer.id);
 let work=await call(alice);equal(work.segments,[{date:'2026-09-15',start:600,end:630}]);
 await call(alice,{action:'stop',id:timer.id}); // stopping twice preserves the end
@@ -50,7 +51,7 @@ await call(alice,{action:'save',id:timer.id,version:1,description:'',segments:[{
 const saved=await call(alice,{action:'save',id:timer.id,version:1,description:'Intervention vérifiée',segments:[{date:'2026-09-15',start:'10:00',end:'10:15'}]});
 equal((await call(alice,{action:'save',id:timer.id,version:1,description:'Intervention vérifiée'})).entry_ids,saved.entry_ids);
 equal((await call(alice)).timer,null);
-let entry=db.prepare('SELECT * FROM entries WHERE id=?').get(saved.entry_ids[0]);equal(entry.end-entry.start,15);equal(entry.hourly_rate_cents,12500);
+let entry=db.prepare('SELECT * FROM entries WHERE id=?').get(saved.entry_ids[0]);equal(entry.end-entry.start,15);equal(entry.hourly_rate_cents,12500);equal(entry.ticket_source,'legacy');equal(entry.ticket,'TIMER-LEGACY');
 equal(db.prepare('SELECT fee_cents FROM travel_days WHERE member_id=?').get(aliceId).fee_cents,2500);
 equal((await call(alice)).recent[0].hourly_rate_cents,null);
 equal((await call(bob)).recent,[]);
@@ -79,6 +80,7 @@ equal(list.tickets[0].url.endsWith('/front/ticket.form.php?id=101'),true);
 list=await call(alice,null,'/api/glpi?tickets=1&page=1');equal(list.tickets.length,2);
 list=await call(alice,null,'/api/glpi?tickets=1&q=VPN');equal(list.tickets.length,1);equal(list.tickets[0].id,101);
 list=await call(alice,null,'/api/glpi?tickets=1&q=103&open=false');equal(list.tickets[0].id,103);
+list=await call(alice,null,'/api/glpi?tickets=1&q=GLPI-10&open=false');equal(list.tickets.length,9);equal(list.tickets[0].id,101);
 equal((await call(alice,null,'/api/glpi?tickets=1&q=absent')).tickets,[]);
 await call(alice,null,'/api/glpi?tickets=1&page=-1',400);
 await call(bob,{action:'connect',token:'bob-test-token'},'/api/glpi');list=await call(bob,null,'/api/glpi?tickets=1');equal(list.total,1);equal(list.tickets[0].id,102);
@@ -102,6 +104,25 @@ await call(alice,{action:'discard',id:atomic.id,version:1});
 // Explicit creation uses personal rights, preserves client/entity and prevents replay.
 await call(alice,{action:'connect',token:'alice-test-token'},'/api/glpi');
 await call(bob,{action:'connect',token:'bob-test-token'},'/api/glpi');
+// Suggestions and server-authoritative ticket validation are GET-only. Direct
+// labels, missing tickets and entity/client mismatches never start a timer.
+const verifiedTimer={...timer,id:randomUUID(),ticket:'forged display',ticket_source:'glpi',glpi_ticket_id:101};
+await call(alice,verifiedTimer);equal(db.prepare('SELECT ticket,ticket_source,glpi_ticket_id FROM work_timers WHERE id=?').get(verifiedTimer.id).ticket,'GLPI-101');
+await call(alice,{action:'discard',id:verifiedTimer.id,version:1});
+const arbitraryTimer=await call(alice,{...verifiedTimer,id:randomUUID(),ticket_source:undefined,glpi_ticket_id:null},'/api/workday',400);equal(arbitraryTimer.code,'TICKET_SELECTION_REQUIRED');
+await call(alice,{...verifiedTimer,id:randomUUID(),glpi_ticket_id:999999},'/api/workday',400);
+await call(alice,{...verifiedTimer,id:randomUUID(),glpi_ticket_id:102},'/api/workday',409);
+await call(bob,{...verifiedTimer,id:randomUUID()},'/api/workday',400);equal((await call(bob)).timer,null);
+const verifiedEntry={action:'saveEntry',id:randomUUID(),client_id:client.id,ticket:'invented display ignored',ticket_source:'glpi',glpi_ticket_id:101,date:'2026-09-16',start:'08:00',end:'08:15',description:'Verified identity',on_site:false};
+await call(alice,verifiedEntry,'/api/time');equal({...db.prepare('SELECT ticket,ticket_source,glpi_ticket_id FROM entries WHERE id=?').get(verifiedEntry.id)},{ticket:'GLPI-101',ticket_source:'glpi',glpi_ticket_id:101});
+await call(alice,{action:'disconnect'},'/api/glpi');await call(alice,verifiedEntry,'/api/time'); // exact replay precedes provider validation
+await call(alice,{action:'connect',token:'alice-test-token'},'/api/glpi');
+await call(alice,{...verifiedEntry,id:randomUUID(),ticket_source:undefined,glpi_ticket_id:null,start:'08:15',end:'08:30'},'/api/time',400);
+await call(alice,{...verifiedEntry,id:randomUUID(),glpi_ticket_id:999999,start:'08:15',end:'08:30'},'/api/time',400);
+await call(alice,{...verifiedEntry,id:randomUUID(),glpi_ticket_id:102,start:'08:15',end:'08:30'},'/api/time',409);
+const pendingEntry={...verifiedEntry,id:randomUUID(),ticket:'anything',ticket_source:'pending',glpi_ticket_id:null,start:'09:00',end:'09:15'};
+await call(alice,pendingEntry,'/api/time');equal({...db.prepare('SELECT ticket,ticket_source FROM entries WHERE id=?').get(pendingEntry.id)},{ticket:'À compléter',ticket_source:'pending'});
+await call(alice,{...pendingEntry,version:1,ticket_source:'glpi',glpi_ticket_id:101},'/api/time');equal({...db.prepare('SELECT ticket,ticket_source,glpi_ticket_id,version FROM entries WHERE id=?').get(pendingEntry.id)},{ticket:'GLPI-101',ticket_source:'glpi',glpi_ticket_id:101,version:2});
 const creation={action:'createTicket',request_id:randomUUID(),client_id:client.id,title:'Ticket depuis Sumatime',description:'Description <script>safe</script>',type:1,urgency:3,category:1};
 const opts=await call(alice,null,'/api/glpi?createOptions=1&client='+client.id);equal(opts.categories[0].id,1);
 await call(alice,{action:'connect',token:'entity-false-test-token'},'/api/glpi');

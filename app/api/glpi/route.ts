@@ -2,6 +2,7 @@ import { getMember, checkOrigin, AuthError, rateLimit } from '@/lib/auth';
 import { sqlite } from '@/db/raw';
 import { acknowledgeGlpiCreationResult, abandonGlpiDistinctCreation, beginGlpiDistinctCreation, createGlpiTicket, glpiCreationOptions, glpiWriteEnabled, GlpiCreationTerminal, GlpiCreationUncertain, GlpiDistinctRequired, glpiConfig, glpiUncertainRequests, hasGlpiToken, glpiTickets, resolveLegacyCreation, saveGlpiToken, testGlpiToken, type GlpiFailureCode } from '@/lib/glpi';
 import type { GlpiErrorContract } from '@/lib/glpi-contract';
+import { normalizedTicketQuery } from '@/lib/ticket-selection';
 export const dynamic = 'force-dynamic';
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { 'Cache-Control': 'no-store' } });
 async function who() { const me = await getMember(); if (!me) throw new AuthError('Reconnectez-vous.', 401); if (me.must_change) throw new AuthError('Changez votre mot de passe provisoire.', 403); return me; }
@@ -56,7 +57,7 @@ export async function GET(request: Request) {
     if (url.searchParams.has('createOptions')) { if(!config) throw new AuthError('GLPI doit être configuré.',409,{ code:'CONFIG_NOT_READY', retryable:true, preserveOperation:true }); return json(await glpiCreationOptions(me.id,config,url.searchParams.get('client')||'')); }
     if (!url.searchParams.has('tickets')) return json({ configured: !!config, canCreate: glpiWriteEnabled(), connected: !!config && hasGlpiToken(me.id, config), web: config?.web || null });
     if (!config) throw new AuthError('L’administrateur doit configurer l’adresse GLPI sur le serveur.', 409, { code:'CONFIG_NOT_READY', retryable:true, preserveOperation:true });
-    const query = (url.searchParams.get('q') || '').trim(), page = Number(url.searchParams.get('page') || 0);
+    const query = normalizedTicketQuery(url.searchParams.get('q') || ''), page = Number(url.searchParams.get('page') || 0);
     if (query.length > 120 || !Number.isSafeInteger(page) || page < 0 || page > 10000) throw new AuthError('Recherche invalide.');
     return json(await glpiTickets(me.id, config, query, page, url.searchParams.get('open') !== 'false'));
   } catch (e) { return fail(e, context); }

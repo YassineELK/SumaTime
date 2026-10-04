@@ -31,6 +31,8 @@ export function sqlite() {
     const clientColumns = db.prepare('PRAGMA table_info(clients)').all() as { name: string }[];
     if (!clientColumns.some(column => column.name === 'color')) db.exec(readFileSync(resolve('drizzle/0004_client_color.sql'), 'utf8'));
     if (!clientColumns.some(column => column.name === 'glpi_entity_id')) db.exec(readFileSync(resolve('drizzle/0005_provider_workspace.sql'), 'utf8'));
+    const ticketColumns = db.prepare('PRAGMA table_info(entries)').all() as { name: string }[];
+    if (!ticketColumns.some(column => column.name === 'ticket_source')) db.exec(readFileSync(resolve('drizzle/0007_ticket_integrity.sql'), 'utf8'));
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }
   db.exec(`CREATE TABLE IF NOT EXISTS accounts (

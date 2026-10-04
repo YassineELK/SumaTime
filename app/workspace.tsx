@@ -20,9 +20,11 @@ import TeamPanel from './team-panel';
 import { ClientRates } from './billing-settings';
 import { euro, serviceAmount } from '@/lib/pricing';
 import { browserUuidV4, BROWSER_UUID_UNAVAILABLE_MESSAGE } from '@/lib/browser-uuid';
+import TicketPicker from '@/components/ticket-picker';
+import { ticketSelectionReady, type TicketSource } from '@/lib/ticket-selection';
 
 type Filters = { from: string; to: string; client: string; member: string; status: string; q: string };
-type EntryForm = { id: string; version?: number; client_id: string; ticket: string; date: string; start: string; end: string; description: string; on_site: boolean | null };
+type EntryForm = { id: string; version?: number; client_id: string; ticket: string; ticket_source?: TicketSource; glpi_ticket_id?: number | null; date: string; start: string; end: string; description: string; on_site: boolean | null };
 const freshForm = (): EntryForm => ({ id: '', client_id: '', ticket: '', date: brusselsToday(), start: '09:00', end: '10:00', description: '', on_site: false });
 const initialFilters = (): Filters => ({ from: brusselsToday().slice(0, 7) + '-01', to: brusselsToday(), client: '', member: '', status: '', q: '' });
 const query = (filters: Filters) => new URLSearchParams(filters).toString();
@@ -72,20 +74,21 @@ export default function Workspace() {
       {
         name: 'stage_time_entry', title: 'Préparer une prestation',
         description: 'Remplir un nouveau brouillon visible, sans enregistrer de prestation. Refuse de remplacer un brouillon déjà saisi. La sauvegarde se fait avec le bouton Enregistrer.',
-        inputSchema: { type: 'object', properties: { client_id: { type: 'string' }, ticket: { type: 'string', maxLength: 120 }, date: { type: 'string', format: 'date' }, start: { type: 'string' }, end: { type: 'string' }, description: { type: 'string', maxLength: 2000 } }, required: ['client_id', 'ticket', 'date', 'start', 'end'], additionalProperties: false },
+        inputSchema: { type: 'object', properties: { client_id: { type: 'string' }, glpi_ticket_id: { type: 'integer', minimum: 1 }, pending: { type: 'boolean' }, date: { type: 'string', format: 'date' }, start: { type: 'string' }, end: { type: 'string' }, description: { type: 'string', maxLength: 2000 } }, required: ['client_id', 'date', 'start', 'end'], additionalProperties: false },
         annotations: { readOnlyHint: false, untrustedContentHint: false },
         async execute(input) {
           if (!input || typeof input !== 'object') throw new Error('Paramètres invalides.');
           const x = input as Record<string, unknown>;
-          const keys = ['client_id', 'ticket', 'date', 'start', 'end', 'description'];
-          if (Object.keys(x).some(key => !keys.includes(key)) || keys.slice(0, 5).some(key => typeof x[key] !== 'string')) throw new Error('Paramètres invalides.');
+          const keys = ['client_id', 'glpi_ticket_id', 'pending', 'date', 'start', 'end', 'description'];
+          if (Object.keys(x).some(key => !keys.includes(key)) || ['client_id', 'date', 'start', 'end'].some(key => typeof x[key] !== 'string')) throw new Error('Paramètres invalides.');
           const draft = currentState.current.form;
           if (draft.ticket || draft.description || draft.version) throw new Error('Un brouillon est déjà présent. Terminez-le avant de préparer une autre prestation.');
           if (!currentState.current.data?.clients.some(c => c.id === x.client_id && c.active)) throw new Error('Client actif requis.');
-          if (!(x.ticket as string).trim() || (x.ticket as string).length > 120 || !validDate(x.date as string) || (x.date as string) > brusselsToday()) throw new Error('Ticket ou date invalide.');
+          const pending = x.pending === true, glpiTicketId = x.glpi_ticket_id;
+          if ((pending && glpiTicketId !== undefined) || (!pending && !(Number.isSafeInteger(glpiTicketId) && Number(glpiTicketId) > 0)) || !validDate(x.date as string) || (x.date as string) > brusselsToday()) throw new Error('Sélectionnez un identifiant GLPI positif ou pending=true explicitement.');
           const start = parseTime(x.start), end = x.end === '00:00' ? 1440 : parseTime(x.end);
           if (end <= start || (x.description !== undefined && (typeof x.description !== 'string' || x.description.length > 2000))) throw new Error('Heures ou description invalides.');
-          setForm({ id: '', client_id: x.client_id as string, ticket: x.ticket as string, date: x.date as string, start: x.start as string, end: x.end as string, description: (x.description as string) || '', on_site: false });
+          setForm({ id: '', client_id: x.client_id as string, ticket: pending ? 'À compléter' : `GLPI-${glpiTicketId}`, ticket_source: pending ? 'pending' : 'glpi', glpi_ticket_id: pending ? null : Number(glpiTicketId), date: x.date as string, start: x.start as string, end: x.end as string, description: (x.description as string) || '', on_site: false });
           setTab('entries');
           await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
           return { staged: true, saved: false, real_minutes: end - start, billable_minutes: billedMinutes(start, end) };
@@ -162,7 +165,7 @@ export default function Workspace() {
   const updateForm = (key: keyof EntryForm, value: string) => setForm(prev => ({ ...prev, [key]: value }));
   const applyFilters = (next: Filters) => { setDraftFilters(next); setFilters(next); setError(''); };
   function edit(e: Entry) {
-    setForm({ id: e.id, version: e.version, client_id: e.client_id, ticket: e.ticket, date: e.date, start: clockTime(e.start), end: e.end === 1440 ? '00:00' : clockTime(e.end), description: e.description, on_site: e.on_site === null ? null : !!e.on_site });
+    setForm({ id: e.id, version: e.version, client_id: e.client_id, ticket: e.ticket, ticket_source: e.ticket_source, glpi_ticket_id: e.glpi_ticket_id, date: e.date, start: clockTime(e.start), end: e.end === 1440 ? '00:00' : clockTime(e.end), description: e.description, on_site: e.on_site === null ? null : !!e.on_site });
     setError(''); setTab('entries'); window.scrollTo({ top: 0, behavior: 'smooth' }); ticketInput.current?.focus();
   }
   async function saveEntry(event: FormEvent) {
@@ -226,13 +229,13 @@ export default function Workspace() {
       <div className="work-grid"><section className="entry-panel panel" aria-labelledby="entry-title"><div className="panel-heading"><span className="square-icon"><Plus size={20} /></span><h2 id="entry-title">{form.version ? 'Modifier la prestation' : 'Nouvelle prestation'}</h2></div>
       {activeClients.length === 0 ? <div className="onboard"><Building2 size={30} /><h3>{isAdmin ? 'Tout commence par un client.' : 'Votre premier client arrive bientôt.'}</h3><p>{isAdmin ? 'Ajoutez un client pour enregistrer votre première intervention.' : 'Demandez à l’administrateur de créer un client.'}</p>{isAdmin && <button className="primary full" onClick={() => setTab('clients')}><Plus size={17} />Ajouter un client</button>}</div> : <form className="entry-form" onSubmit={saveEntry}>
         <label>Client <span className="required">*</span><select required value={form.client_id} onChange={e => updateForm('client_id', e.target.value)}><option value="">Choisir un client</option>{activeClients.map(c => <option key={c.id} value={c.id}>{c.name}{c.active ? '' : ' (archivé)'}</option>)}</select></label>
-        <label>Ticket <span className="required">*</span><input ref={ticketInput} required maxLength={120} placeholder="Ex. INC-2026-042" value={form.ticket} onChange={e => updateForm('ticket', e.target.value)} /></label>
+        <TicketPicker clients={data.clients} clientId={form.client_id} value={form} disabled={busy} onChange={value => setForm(previous => ({ ...previous, ...value }))} />
         <label>Date de l’intervention <span className="required">*</span><input required type="date" max={brusselsToday()} value={form.date} onChange={e => updateForm('date', e.target.value)} /></label>
         <div className="time-fields"><TimeInput label="Début" value={form.start} onChange={value => updateForm('start', value)} /><span>→</span><TimeInput label="Fin" value={form.end} onChange={value => updateForm('end', value)} /></div>
         <LocationField value={form.on_site} onChange={on_site => setForm(prev => ({ ...prev, on_site }))} />
         <label>Description <span className="optional">facultatif</span><textarea rows={3} maxLength={2000} placeholder="Sur quoi avez-vous travaillé ?" value={form.description} onChange={e => updateForm('description', e.target.value)} /></label>
         <div className="duration-preview"><div><span>Temps réel</span><strong>{form.start && form.end && formMinutes > 0 ? duration(formMinutes) : '—'}</strong></div><ChevronRight size={18} /><div><span>À facturer</span><strong>{form.start && form.end && formMinutes > 0 ? duration(Math.ceil(formMinutes / 15) * 15) : '—'}</strong></div></div>
-        <button className="primary full" disabled={busy || !form.end || formMinutes <= 0}><Check size={18} />{busy ? 'Enregistrement…' : form.version ? 'Enregistrer les modifications' : 'Enregistrer la prestation'}</button>
+        <button className="primary full" disabled={busy || !form.end || formMinutes <= 0 || !(ticketSelectionReady(form) || (!!form.version && form.ticket_source === 'legacy'))}><Check size={18} />{busy ? 'Enregistrement…' : form.version ? 'Enregistrer les modifications' : 'Enregistrer la prestation'}</button>
         {form.version && <button type="button" className="text-button" onClick={() => setForm(freshForm())}>Annuler la modification</button>}<p className="form-note">Bruxelles · Fin 00:00 = minuit · <span>*</span> Champs obligatoires</p>
       </form>}</section>
       <section className="ledger panel" aria-labelledby="ledger-title"><div className="ledger-heading"><div><h2 id="ledger-title">Le relevé <span className="count">{rows.length}</span></h2><p>{dateLabel(filters.from)} — {dateLabel(filters.to)} {filters.to.slice(0, 4)}</p></div><details className="export-menu"><summary><ArrowDownToLine size={17} />Exporter</summary><div><button disabled={busy || loading || !rows.length} onClick={() => void exportCsv('detail')}>CSV détaillé <FileText size={16} /></button><button disabled={busy || loading || !rows.length} onClick={() => void exportCsv('summary')}>Synthèse par client <Building2 size={16} /></button><button disabled={busy || loading || !rows.length} onClick={() => void exportCsv('client')}>Relevé client · Sans partenaire <FileText size={16} /></button><button disabled={busy || loading || !rows.length} onClick={() => void exportCsv('partner')}>Relevé partenaire · Facture <Users size={16} /></button><small>Relevé partenaire : choisir un partenaire, Tous les statuts, sans recherche, puis Appliquer. Temps et déplacements avec total ; tarifs clients exclus.</small><small>Relevé client : sélectionner un client puis Appliquer. Les forfaits sont rattachés à la première prestation sur site enregistrée du jour et du client.</small></div></details></div>
