@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  output: 'standalone',
   serverExternalPackages: ['ldapts'],
   poweredByHeader: false,
   async headers() { return [{ source: '/:path*', headers: [

@@ -1,0 +1,21 @@
+[Unit]
+Description=Local simulated GLPI for Sumatime preview
+After=network.target
+[Service]
+User=sumatime-preview
+Group=sumatime-preview
+WorkingDirectory=/opt/sumatime-preview
+EnvironmentFile=/etc/sumatime-preview/preview.env
+ExecStart=/usr/bin/node /opt/sumatime-preview/preview-mock.mjs
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/sumatime-preview
+CapabilityBoundingSet=
+MemoryMax=256M
+[Install]
+WantedBy=multi-user.target

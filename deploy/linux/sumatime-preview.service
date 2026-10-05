@@ -1,0 +1,22 @@
+[Unit]
+Description=Sumatime isolated preview
+After=network.target sumatime-preview-glpi.service
+Wants=sumatime-preview-glpi.service
+[Service]
+User=sumatime-preview
+Group=sumatime-preview
+WorkingDirectory=/opt/sumatime-preview/current
+EnvironmentFile=/etc/sumatime-preview/preview.env
+ExecStart=/usr/bin/node /opt/sumatime-preview/current/server.js
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/sumatime-preview /var/cache/sumatime-preview
+CapabilityBoundingSet=
+MemoryMax=1536M
+[Install]
+WantedBy=multi-user.target
