@@ -2,11 +2,11 @@
 
 ## Installation déployée
 
-Adresse : https://sumatime.home.sumatoni.be — serveur 192.168.87.224, Ubuntu 24.04 dans un conteneur LXC Proxmox. Version applicative 0.2.1, Node.js 24.21.0. Base initialement vide à la demande du propriétaire : aucune donnée du poste de développement transférée.
+Adresse : https://sumatime.home.sumatoni.be — serveur 192.168.87.224, Ubuntu 24.04 dans un conteneur LXC Proxmox. Version applicative 0.3.0, Node.js 24.21.0. Base initialement vide à la demande du propriétaire : aucune donnée du poste de développement transférée.
 
 | Élément | Emplacement |
 | --- | --- |
-| Sources et dépendances | `/opt/sumatoni-time/releases/v0.2.1` |
+| Sources et dépendances | `/opt/sumatoni-time/releases/v0.3.0` |
 | Version active | `/opt/sumatoni-time/current` (lien symbolique) |
 | Configuration | `/etc/sumatoni-time/sumatoni.env` |
 | Base SQLite | `/var/lib/sumatoni-time/timesheet.sqlite` |
@@ -75,3 +75,11 @@ Le système présentait avant déploiement un échec du service `proxmox-regener
 Créer un nouveau répertoire versionné, installer les dépendances avec `npm ci`, compiler et tester sur une base isolée, puis sauvegarder la production avant de basculer le lien `current` et redémarrer le service. Préparer le cache comme dans la version déployée et rendre les sources non modifiables par le compte applicatif. Une migration de schéma peut empêcher un simple retour au code précédent : utiliser une sauvegarde cohérente, application et base, après analyse de la compatibilité.
 
 Avis de sécurité corrigé : https://github.com/advisories/GHSA-w5vr-8v7q-w6rv
+
+## Mise en production v0.3.0 — 5 octobre 2026
+
+Le service utilise désormais le build standalone : `/usr/local/bin/node /opt/sumatoni-time/current/server.js`. Le complément systemd `sumatoni-time.service.d/runtime-v03.conf` remplace uniquement ExecStart. `HOSTNAME=127.0.0.1`, `PORT=5173`, `SUMATONI_PREVIEW=false` et `GLPI_WRITE_ENABLED=true` figurent dans l’environnement. Le reverse proxy HTTPS reste configuré sur le port interne 5173.
+
+Le paquet contient `release-manifest.json` et l’archive Git `sources.tar.gz`, sans configuration privée ni base de développement. Le cache de cette version est `/var/cache/sumatoni-time/next/v0.3.0`.
+
+Voir `docs/DEPLOIEMENT-V0.3.0-2026-10-05.md` pour les preuves et le retour arrière. Les anciennes références ticket sont migrées comme historiques ; les comptes, prestations et jetons existants sont conservés.

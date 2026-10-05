@@ -1,5 +1,14 @@
 # Versions de Sumatoni Time
 
+## v0.3.0 — 5 octobre 2026
+
+- Calendrier : déplacement, redimensionnement, annulation avec contrôle de version et suppression confirmée. Les prestations facturées restent protégées.
+- Horaires manuels à la minute ; gestes de quinze minutes préservant les minutes initiales.
+- Chrono : début au quart inférieur, fin au quart supérieur ; 09:07–10:22 devient 09:00–10:30.
+- Création GLPI avec droits personnels, sélection de l’entité du client et identité persistante pour récupérer un résultat sans création en double.
+- Sélection d’un ticket GLPI vérifié ou « À compléter » ; références historiques conservées lors de la migration.
+- Déploiement standalone Ubuntu, sauvegardes avant/après et conservation des données de production. Recette : 70 tests, 199 assertions API, 212 prestataire, 101 R2 et 26 Round14 ; compilation et TypeScript réussis.
+
 ## v0.2.1 — 17 septembre 2026
 
 - Déploiement Ubuntu : service systemd non privilégié, reverse proxy Nginx HTTPS et sauvegarde quotidienne vérifiée.

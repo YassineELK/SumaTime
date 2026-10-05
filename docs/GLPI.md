@@ -34,6 +34,16 @@ Un administrateur ouvre **Clients → Association GLPI**, puis indique l’ident
 
 Sans correspondance active, le ticket reste utilisable, mais le prestataire doit choisir le client avant d’enregistrer ou de démarrer le chronomètre. Le mode initial est « À distance » ; cocher **Sur site** au besoin. Aucun tarif GLPI n’est importé : les règles et tarifs configurés dans Time s’appliquent.
 
+## Créer et sélectionner des tickets (v0.3)
+
+Activer `GLPI_WRITE_ENABLED=true` dans l’environnement du service pour autoriser **Nouveau ticket GLPI**. La production Sumatoni l’active depuis le 5 octobre 2026. Le compte GLPI personnel doit avoir les droits de création ; l’administration Time ne donne pas de droits supplémentaires dans GLPI.
+
+Associer chaque client actif à son entité GLPI exacte. Les tickets proposés sans association ne peuvent pas être sélectionnés comme références vérifiées. **À compléter plus tard** permet d’enregistrer le temps avant que le ticket soit disponible.
+
+Créer depuis les tickets, la saisie rapide ou le calendrier : client, titre, description, type, catégorie et urgence. Les modèles GLPI peuvent exiger des champs supplémentaires ; compléter directement dans GLPI en cas de refus. **Utiliser ce ticket** conserve les horaires du brouillon.
+
+UUID, réservation, résultat et acquittement sont persistants. Une réponse perdue se récupère avec la même identité ; une réponse fournisseur incertaine bloque le renvoi automatique. Les tables `glpi_creations`, `glpi_creation_aliases` et `glpi_creation_intents` font partie de la base à sauvegarder. La création a été testée sur simulateur ; aucun ticket réel n’a été créé lors du déploiement.
+
 ## Données et sauvegardes
 
 La table `glpi_credentials` contient un jeton chiffré AES-256-GCM par membre. Le chiffrement lie le jeton au membre et à l’adresse API. La clé aléatoire de 32 octets est créée dans `glpi-key`, à côté de la base SQLite, lors de la première connexion. Restreindre les ACL NTFS du dossier de données au compte de service et aux administrateurs autorisés.
@@ -44,6 +54,6 @@ Les requêtes ont un délai global de 15 secondes, une réponse limitée à 2 Mo
 
 ## Validation
 
-Recherche, pagination, choix du client, isolation entre utilisateurs, chiffrement, jetons invalides, réponses incohérentes, redirections, délai d’attente et sauvegarde de clé sont testés contre une API GLPI simulée sur une base isolée. L’instance réelle n’a pas été connectée : l’adresse et les jetons ne sont pas disponibles dans ce projet.
+Recherche, pagination, choix du client, isolation entre utilisateurs, chiffrement, jetons invalides, réponses incohérentes, redirections, délai d’attente et sauvegarde de clé sont testés contre une API GLPI simulée sur une base isolée. La connexion réelle existante est conservée en production. Les essais de création et de récupération utilisent exclusivement un simulateur.
 
 Références officielles : [API REST V1](https://help.glpi-project.org/documentation/modules/configuration/general/api/api), [API V2 et versionnement](https://help.glpi-project.org/documentation/modules/configuration/general/api/restful-api-v2).

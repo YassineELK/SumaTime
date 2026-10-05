@@ -111,3 +111,13 @@ Les exports internes conservent les partenaires, séparent À distance et Sur si
 L’administrateur peut ouvrir **Clients → Couleur du calendrier**, choisir une couleur proposée ou personnalisée, puis cliquer sur **Enregistrer la couleur**. Le choix s’applique aux prestations anciennes et nouvelles du client, pour toute l’équipe. Le calendrier conserve un fond clair teinté et un texte foncé pour la lisibilité, avec une bordure dans la couleur choisie.
 
 **Revenir à la couleur par défaut**, puis enregistrer, supprime la personnalisation. Les clients existants gardent leur apparence par défaut tant qu’aucune couleur n’est choisie. Les prestations facturées conservent leur cadenas et, lorsqu’elles sont personnalisées, un contour en pointillés. Ce réglage visuel ne modifie pas les temps, tarifs, exports ou statuts.
+
+## Nouveautés v0.3
+
+Dans le calendrier, glisser une prestation pour la déplacer ou utiliser les poignées pour modifier son début et sa fin. Les gestes appliquent quinze minutes ; les heures précises peuvent être saisies au clavier. Les flèches sur les poignées permettent plusieurs ajustements successifs. Après une modification, **Annuler le déplacement** restaure les horaires si personne n’a modifié la prestation entre-temps. Pour supprimer, ouvrir la prestation et utiliser **Supprimer**, puis confirmer. Une prestation facturée reste verrouillée.
+
+Le chronomètre propose un début arrondi au quart inférieur et une fin au quart supérieur : 09:07–10:22 donne 09:00–10:30. Vérifier les horaires avant d’enregistrer ; les champs restent modifiables à la minute.
+
+Pour une nouvelle prestation, rechercher le numéro ou le titre dans le champ **Ticket**, puis sélectionner un résultat GLPI associé à un client actif. Cocher **Inclure les clos** au besoin. Si le ticket n’est pas encore disponible, utiliser **À compléter plus tard**. Une référence historique déjà enregistrée est conservée, mais une nouvelle référence GLPI est vérifiée côté serveur.
+
+**Nouveau ticket GLPI** permet de créer un ticket puis **Utiliser ce ticket** remplit la référence sans perdre les horaires du brouillon. Les clients doivent être associés à leurs entités dans **Clients → Association GLPI**. Après une réponse incertaine, utiliser la récupération proposée ; ne recréer une demande distincte qu’après vérification dans GLPI.

@@ -4,7 +4,7 @@ Application web pour administrateur et partenaires : calendrier au quart d’heu
 
 Comptes locaux par e-mail/mot de passe. Active Directory / LDAP optionnel. Aucun compte ChatGPT requis.
 
-La version 0.2.0 ajoute **Ma journée**, le chronomètre persistant avec vérification des horaires, les brouillons de saisie rapide, la reprise des tickets récents et un connecteur GLPI individuel en lecture seule. Voir [les nouveautés](CHANGELOG.md) et [la configuration GLPI](docs/GLPI.md).
+La version 0.3.0 permet de déplacer, redimensionner et supprimer les prestations dans le calendrier, et de créer des tickets GLPI. La saisie manuelle reste à la minute ; le chrono arrondit le début au quart inférieur et la fin au quart supérieur. Les nouveaux tickets sont sélectionnés dans GLPI ou marqués explicitement « À compléter ». Voir [les nouveautés](CHANGELOG.md), [GLPI](docs/GLPI.md) et [le déploiement validé](docs/DEPLOIEMENT-V0.3.0-2026-10-05.md).
 
 ## Démarrer
 
