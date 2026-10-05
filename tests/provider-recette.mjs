@@ -79,6 +79,9 @@ let list=await call(alice,null,'/api/glpi?tickets=1');equal(list.tickets.length,
 equal(list.tickets[0].url.endsWith('/front/ticket.form.php?id=101'),true);
 list=await call(alice,null,'/api/glpi?tickets=1&page=1');equal(list.tickets.length,2);
 list=await call(alice,null,'/api/glpi?tickets=1&q=VPN');equal(list.tickets.length,1);equal(list.tickets[0].id,101);
+list=await call(alice,null,'/api/glpi?tickets=1&q=103');equal(list.tickets[0].id,103);equal(list.tickets[0].status,5);
+list=await call(alice,null,'/api/glpi?tickets=1&q=104');equal(list.tickets,[]);
+list=await call(alice,null,'/api/glpi?tickets=1&q=104&open=false');equal(list.tickets[0].id,104);equal(list.tickets[0].status,6);
 list=await call(alice,null,'/api/glpi?tickets=1&q=103&open=false');equal(list.tickets[0].id,103);
 list=await call(alice,null,'/api/glpi?tickets=1&q=GLPI-10&open=false');equal(list.tickets.length,9);equal(list.tickets[0].id,101);
 equal((await call(alice,null,'/api/glpi?tickets=1&q=absent')).tickets,[]);

@@ -24,7 +24,7 @@ Redémarrer le service ou la tâche Windows de Time. La connexion se fait depuis
 3. Saisir le jeton et cliquer **Connecter mon compte GLPI**.
 4. Rechercher un numéro ou un titre, puis choisir **Saisir du temps** ou **Chrono**.
 
-Les résultats utilisent les droits, le profil et l’entité actifs de la session GLPI personnelle. Être administrateur dans Time ne donne pas les droits d’un autre compte GLPI. Le filtre initial montre les tickets ouverts ; **Tous les tickets** inclut les tickets résolus et clos. Chaque page contient au maximum dix tickets. Le jeton n’est jamais renvoyé au navigateur après l’enregistrement.
+Les résultats utilisent les droits et le profil actifs de la session GLPI personnelle. Sumatime active toutes les entités autorisées par ce profil avant la recherche et la validation d’un ticket, sans changer de profil. Être administrateur dans Time ne donne pas les droits d’un autre compte GLPI. Le filtre initial montre les tickets non clos, y compris les tickets résolus (statut 5) ; **Tous les tickets** ou **Inclure les clos** ajoute les tickets clos (statut 6). Chaque page contient au maximum dix tickets. Le jeton n’est jamais renvoyé au navigateur après l’enregistrement.
 
 Dans **Ma connexion GLPI**, déconnecter retire le jeton du compte Time et conserve les prestations. Reconnecter ensuite pour remplacer un jeton expiré ou révoqué. Changer l’adresse API serveur exige de reconnecter chaque compte : les anciens jetons ne sont pas envoyés à la nouvelle adresse.
 
@@ -32,7 +32,7 @@ Dans **Ma connexion GLPI**, déconnecter retire le jeton du compte Time et conse
 
 Un administrateur ouvre **Clients → Association GLPI**, puis indique l’identifiant numérique de l’entité correspondant au client. Zéro est valide. Une entité exacte ne peut appartenir qu’à un client Time. Les sous-entités ne sont pas assimilées automatiquement au parent.
 
-Sans correspondance active, le ticket reste utilisable, mais le prestataire doit choisir le client avant d’enregistrer ou de démarrer le chronomètre. Le mode initial est « À distance » ; cocher **Sur site** au besoin. Aucun tarif GLPI n’est importé : les règles et tarifs configurés dans Time s’appliquent.
+Sans correspondance active, le ticket est affiché mais ne peut pas être sélectionné comme référence vérifiée ; associer son entité à un client actif ou choisir explicitement « À compléter plus tard ». Le mode initial est « À distance » ; cocher **Sur site** au besoin. Aucun tarif GLPI n’est importé : les règles et tarifs configurés dans Time s’appliquent.
 
 ## Créer et sélectionner des tickets (v0.3)
 
@@ -57,3 +57,10 @@ Les requêtes ont un délai global de 15 secondes, une réponse limitée à 2 Mo
 Recherche, pagination, choix du client, isolation entre utilisateurs, chiffrement, jetons invalides, réponses incohérentes, redirections, délai d’attente et sauvegarde de clé sont testés contre une API GLPI simulée sur une base isolée. La connexion réelle existante est conservée en production. Les essais de création et de récupération utilisent exclusivement un simulateur.
 
 Références officielles : [API REST V1](https://help.glpi-project.org/documentation/modules/configuration/general/api/api), [API V2 et versionnement](https://help.glpi-project.org/documentation/modules/configuration/general/api/restful-api-v2).
+
+
+## Correctif v0.3.1 — périmètre des entités et statuts
+
+Chaque recherche et validation ouvre une session API personnelle, active les entités autorisées au profil courant avec `changeActiveEntities` et ferme cette session dans `finally`. Le corps `{ "is_recursive": true }` omet `entities_id` : GLPI transforme un identifiant explicitement fourni en entier, y compris la chaîne `"all"`, qui devient 0. L’omission utilise réellement le mode toutes les entités accessibles. Un refus, une réponse invalide ou une erreur HTTP bloque la recherche/validation ; aucun profil Super-Admin n’est sélectionné automatiquement.
+
+La création de tickets conserve son contexte explicite d’entité client et ses contrôles existants. L’association entre client actif et entité GLPI reste obligatoire pour sélectionner et enregistrer un ticket. Le statut Résolu n’est pas un statut Clos : la recherche par défaut exclut uniquement le statut 6.

@@ -148,8 +148,17 @@ async function session<T>(config: Config, token: string, work: (get: GlpiGet, po
   finally { try { await request(config, 'killSession', headers, AbortSignal.timeout(2000)); } catch {} }
 }
 export async function testGlpiToken(config: Config, token: string) { await session(config, token, async get => { await get('getMyProfiles'); }); }
+// Keep the personal user's active profile, but include every entity that profile
+// permits. GLPI casts an explicit entities_id to an integer: even 'all' becomes
+// 0. Omitting entities_id is what actually selects all permitted entities.
+async function selectReadableEntities(post: GlpiPost) {
+  const selected = await post('changeActiveEntities', { is_recursive: true });
+  if (selected === false) throw new AuthError('GLPI refuse la consultation des entités accessibles à votre profil.', 502, { code: 'GLPI_ACCESS_DENIED', retryable: false, preserveOperation: true });
+  if (selected !== true) throw new AuthError('GLPI n’a pas confirmé les entités à consulter. Réessayez.', 502, { code: 'GLPI_RESPONSE_INVALID', retryable: true, preserveOperation: true });
+}
 export async function glpiTickets(member: string, config: Config, query: string, page: number, open: boolean) {
-  return session(config, tokenFor(member, config), async get => {
+  return session(config, tokenFor(member, config), async (get, post) => {
+    await selectReadableEntities(post);
     const options = objectOrThrow(await get('listSearchOptions/Ticket'), 'Les champs de recherche GLPI sont incompatibles avec ce connecteur.');
     const field = (name: string) => Object.entries(options).find(([, value]) => {
       const option = object(value);
@@ -160,7 +169,7 @@ export async function glpiTickets(member: string, config: Config, query: string,
     const params = new URLSearchParams({ range: `${page * 10}-${page * 10 + 9}`, sort: idField, order: 'DESC', 'forcedisplay[0]': idField, rawdata: 'false', uid_cols: 'false', giveItems: 'false' });
     let index = 0;
     if (query) { params.set(`criteria[${index}][field]`, /^\d+$/.test(query) ? idField : nameField); params.set(`criteria[${index}][searchtype]`, 'contains'); params.set(`criteria[${index}][value]`, /^\d+$/.test(query) ? '^' + query : query); index++; }
-    if (open) { params.set(`criteria[${index}][link]`, 'AND'); params.set(`criteria[${index}][field]`, statusField); params.set(`criteria[${index}][searchtype]`, 'equals'); params.set(`criteria[${index}][value]`, 'notold'); }
+    if (open) { params.set(`criteria[${index}][link]`, 'AND'); params.set(`criteria[${index}][field]`, statusField); params.set(`criteria[${index}][searchtype]`, 'equals'); params.set(`criteria[${index}][value]`, 'notclosed'); }
     const result = objectOrThrow(await get('search/Ticket?' + params), 'La réponse de GLPI est inattendue.');
     const total = integer(result.totalcount);
     const dataObject = object(result.data);
@@ -189,7 +198,8 @@ export async function validateGlpiTicketSelection(member: string, ticketId: numb
   const config = glpiConfig();
   if (!config) throw new AuthError('La validation du ticket GLPI est indisponible. Connectez GLPI ou choisissez explicitement « À compléter ».', 503, { code: 'CONFIG_NOT_READY', retryable: true, preserveOperation: true });
   if (!hasGlpiToken(member, config)) throw new AuthError('Connectez votre compte GLPI ou choisissez explicitement « À compléter ».', 409, { code: 'GLPI_AUTH_REQUIRED', retryable: true, preserveOperation: true });
-  return session(config, tokenFor(member, config), async get => {
+  return session(config, tokenFor(member, config), async (get, post) => {
+    await selectReadableEntities(post);
     let raw: unknown;
     try { raw = await get('Ticket/' + ticketId); }
     catch (error) { if (error instanceof AuthError && ['TICKET_SELECTION_REQUIRED', 'GLPI_ACCESS_DENIED'].includes(error.code || '')) throw new AuthError('Ce ticket GLPI est introuvable ou inaccessible avec votre compte.', 400, { code: 'TICKET_SELECTION_REQUIRED', retryable: false, preserveOperation: true }); throw error; }
