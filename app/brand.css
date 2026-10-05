@@ -23,19 +23,21 @@ button:focus-visible,a:focus-visible,summary:focus-visible{outline-color:var(--b
 .profile{border-color:#234454}
 .avatar{background:#123d50;border-color:#2d647d;color:#def3fc}
 .sidebar>.brand{background:#f7fbfd;border:1px solid #29a7df45;border-radius:12px;padding:12px 10px;letter-spacing:normal}
-.sumatoni-brand{display:flex;align-items:center;gap:10px;min-width:0;width:100%;line-height:1}
-.sumatoni-mark{display:block;object-fit:contain;width:31px;height:40px;flex:none}
-.sumatoni-brand-copy{display:flex;flex-direction:column;min-width:0;gap:7px;align-items:flex-start}
-.sumatoni-wordmark{display:block;object-fit:contain;width:140px;max-width:100%;height:auto}
-.sumatoni-product{font-family:var(--font-brand);font-size:10px;line-height:1;font-weight:600;letter-spacing:.28em;color:#086b8d}
+.sumatime-brand{display:flex;align-items:center;gap:10px;min-width:0;width:100%;line-height:1}
+.sumatime-mark{display:block;width:36px;height:36px;flex:none}
+.sumatime-brand-copy{display:flex;flex-direction:column;min-width:0;gap:7px;align-items:flex-start}
+.sumatime-wordmark{font-family:var(--font-brand);font-size:20px;font-weight:600;line-height:1.15;letter-spacing:-.04em;color:var(--brand-heading);white-space:nowrap}
+.sumatime-product{font-family:var(--font-brand);font-size:8px;line-height:1;font-weight:500;letter-spacing:.16em;color:var(--blue)}
 .dark-brand{margin-bottom:32px;padding:0}
-.dark-brand .sumatoni-mark{width:40px;height:51px}
-.dark-brand .sumatoni-wordmark{width:184px}
-.dark-brand .sumatoni-brand{gap:15px}
-.page-footer .sumatoni-brand{width:148px;gap:8px}
-.page-footer .sumatoni-mark{width:22px;height:28px}
-.page-footer .sumatoni-product{font-size:8px}
-.page-footer .sumatoni-brand-copy{gap:5px}
+.dark-brand .sumatime-mark{width:48px;height:48px}
+.dark-brand .sumatime-wordmark{font-size:28px}
+.dark-brand .sumatime-product{font-size:10px}
+.dark-brand .sumatime-brand{gap:13px}
+.page-footer .sumatime-brand{width:158px;gap:8px}
+.page-footer .sumatime-mark{width:24px;height:24px}
+.page-footer .sumatime-wordmark{font-size:16px}
+.page-footer .sumatime-product{font-size:7px}
+.page-footer .sumatime-brand-copy{gap:4px}
 .primary{background:var(--accent);color:#041018;border:1px solid transparent}
 .primary:hover{background:#35b4ec}
 .secondary{color:#173b4b;border-color:#c7dee7}
@@ -86,4 +88,4 @@ button:focus-visible,a:focus-visible,summary:focus-visible{outline-color:var(--b
 .calendar-event.has-client-color{background:color-mix(in srgb,var(--client-color) 10%,white);border-color:var(--client-border);border-left-color:var(--client-color);color:#183543}
 .calendar-event.has-client-color:hover{background:color-mix(in srgb,var(--client-color) 18%,white)}
 .calendar-event.has-client-color.is-billed{border-top-style:dashed;border-right-style:dashed;border-bottom-style:dashed}
-@media(max-width:760px){.sidebar{overflow:visible}.sidebar>.brand{width:184px;padding:8px 10px}.sidebar nav button.active{box-shadow:inset 0 -3px var(--accent)}.calendar-day-label.selected-day{box-shadow:inset 0 -3px #08759c;background:#e9f5fb}.page-footer{align-items:center}.dark-brand .sumatoni-wordmark{width:160px}}
+@media(max-width:760px){.sidebar{overflow:visible}.sidebar>.brand{width:184px;padding:8px 10px}.sidebar nav button.active{box-shadow:inset 0 -3px var(--accent)}.calendar-day-label.selected-day{box-shadow:inset 0 -3px #08759c;background:#e9f5fb}.page-footer{align-items:center}.dark-brand .sumatime-wordmark{font-size:26px}}

@@ -6,11 +6,11 @@ import "./provider.css";
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
-  title: "Sumatoni Time · Prestations",
+  title: "Sumatime · Prestations",
   description: "Vos prestations, du temps saisi au relevé de facturation.",
   icons: {
-    icon: "/brand/sumatoni-mark.png",
-    shortcut: "/brand/sumatoni-mark.png",
+    icon: "/brand/sumatime-clock.svg",
+    shortcut: "/brand/sumatime-clock.svg",
   },
 };
 

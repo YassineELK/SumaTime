@@ -14,8 +14,10 @@ La navigation et l’écran de connexion reprennent les fonds sombres du site ; 
 
 ## Ressources locales
 
-Le logo et le mot-symbole sont les fichiers publics d’origine, sans recoloration : `/icon.e810b9a9.png` et `/wordmark.b193aacd.png`. Ils sont conservés dans `public/brand/`. Un fond clair maintient le contraste du mot-symbole dans la navigation sombre. Le composant commun `components/brand.tsx` les affiche dans la navigation, la connexion et le pied de page.
+Sumatime possède son propre logo depuis le 5 octobre 2026 : une horloge simple, avec un cercle bleu `#29A7DF` et des aiguilles turquoise `#008082`, conservée dans `public/brand/sumatime-clock.svg`. Le nom « Sumatime » est affiché en Poppins, dans le bleu nuit de la charte. Le composant commun `components/brand.tsx` affiche cette identité dans la navigation, la connexion et le pied de page. L'horloge sert également d'icône d'onglet. Les couleurs et la typographie Sumatoni restent celles de l'interface.
 
-Les fichiers Poppins 400/500/600/700 proviennent des fichiers WOFF2 servis par le site public. Ils sont hébergés dans `public/fonts/`, avec la [licence SIL Open Font License](https://github.com/google/fonts/blob/main/ofl/poppins/OFL.txt) conservée dans `OFL-Poppins.txt`. Aucun appel à Google Fonts ni au site public n’est nécessaire à l’exécution. Les logos Sumatoni restent les éléments d’identité de Sumatoni.
+Les anciens logos publics Sumatoni sont conservés dans `public/brand/` pour référence, mais ne sont plus affichés comme logo de l'application.
+
+Les fichiers Poppins 400/500/600/700 proviennent des fichiers WOFF2 servis par le site public. Ils sont hébergés dans `public/fonts/`, avec la [licence SIL Open Font License](https://github.com/google/fonts/blob/main/ofl/poppins/OFL.txt) conservée dans `OFL-Poppins.txt`. Aucun appel à Google Fonts ni au site public n’est nécessaire à l’exécution.
 
 Vérifier les écrans à 390 px et sur ordinateur lors des changements de typographie, notamment les événements de calendrier de 15 et 30 minutes et les dialogues.
