@@ -202,7 +202,8 @@ assert(simultaneousBodies.some(body=>body.ticket||body.operation));checks++;
 // A second on-site timer on the same client/day does not create a second trip.
 const daily={...timer,id:randomUUID(),ticket:'DAILY-FEE'};await call(alice,daily);
 db.prepare('UPDATE work_timers SET started_at=?,stopped_at=? WHERE id=?').run(Date.parse('2026-09-15T09:00:00Z'),Date.parse('2026-09-15T09:15:00Z'),daily.id);
-await call(alice,{action:'save',id:daily.id,version:1,description:''});equal(db.prepare('SELECT COUNT(*) AS n FROM travel_days WHERE member_id=?').get(aliceId).n,3);
+const tripsBeforeDaily=db.prepare('SELECT COUNT(*) AS n FROM travel_days WHERE member_id=?').get(aliceId).n;
+await call(alice,{action:'save',id:daily.id,version:1,description:''});equal(db.prepare('SELECT COUNT(*) AS n FROM travel_days WHERE member_id=?').get(aliceId).n,tripsBeforeDaily);
 const beforeBackups=new Set(existsSync('backups') ? readdirSync('backups') : []);
 const backup=spawnSync(process.execPath,['scripts/backup.mjs'],{env:process.env,encoding:'utf8'});equal(backup.status,0);
 const createdBackup=readdirSync('backups').find(f=>!beforeBackups.has(f)&&f.endsWith('.sqlite'));assert(createdBackup);checks++;
