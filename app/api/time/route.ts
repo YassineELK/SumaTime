@@ -96,7 +96,7 @@ export async function GET(request: Request) {
     }
     const [clients, members] = await Promise.all([
       db.prepare(member.role === 'admin' ? 'SELECT * FROM clients ORDER BY active DESC, name COLLATE NOCASE' : 'SELECT id,name,active,color,glpi_entity_id,NULL AS hourly_rate_cents,NULL AS onsite_hourly_rate_cents FROM clients ORDER BY active DESC,name COLLATE NOCASE').all(),
-      member.role === 'admin' ? db.prepare('SELECT m.id,m.user_id,m.email,m.name,m.role,m.active,m.travel_fee_cents,a.provider,a.login FROM members m LEFT JOIN accounts a ON a.member_id=m.id ORDER BY m.name COLLATE NOCASE').all() : Promise.resolve({ results: [member] }),
+      member.role === 'admin' ? db.prepare(`SELECT m.id,m.user_id,m.email,m.name,m.role,m.active,m.travel_fee_cents,COALESCE(a.provider,CASE WHEN ei.member_id IS NOT NULL THEN 'entra' END) AS provider,a.login,ei.tenant_id AS entra_tenant_id,ei.object_id AS entra_object_id FROM members m LEFT JOIN accounts a ON a.member_id=m.id LEFT JOIN entra_identities ei ON ei.member_id=m.id ORDER BY m.name COLLATE NOCASE`).all() : Promise.resolve({ results: [member] }),
     ]);
     return response({ me: member, clients: clients.results, members: members.results, entries: rows });
   } catch (error) { return fail(error); }

@@ -2,7 +2,7 @@
 
 Application web pour administrateur et partenaires : calendrier au quart d’heure, saisie client/ticket/horaires, arrondi supérieur par prestation, exports CSV internes, relevé client sans partenaire et relevé par partenaire avec totaux pour contrôler sa facture, modes sur site/à distance, tarifs horaires et forfait de déplacement quotidien par client et prestataire, verrouillage de facturation.
 
-Comptes locaux par e-mail/mot de passe. Active Directory / LDAP optionnel. Aucun compte ChatGPT requis.
+Comptes locaux par e-mail/mot de passe. Active Directory / LDAP et Microsoft Entra ID optionnels. Aucun compte ChatGPT requis.
 
 La version 0.3.0 permet de déplacer, redimensionner et supprimer les prestations dans le calendrier, et de créer des tickets GLPI. La saisie manuelle reste à la minute ; le chrono arrondit le début au quart inférieur et la fin au quart supérieur. Les nouveaux tickets sont sélectionnés dans GLPI ou marqués explicitement « À compléter ». Voir [les nouveautés](CHANGELOG.md), [GLPI](docs/GLPI.md) et [le déploiement validé](docs/DEPLOIEMENT-V0.3.0-2026-10-05.md).
 
@@ -29,9 +29,12 @@ Ouvrir http://127.0.0.1:5173. Créer l’administrateur avec le code généré d
 
 ```powershell
 node node_modules/typescript/bin/tsc --noEmit
-node --test tests/business.test.mjs tests/calendar.test.mjs tests/auth.test.mjs tests/workday.test.mjs
+node --import=tsx --test --test-concurrency=2 tests/*.test.mjs
+npm run test:entra
 node tests/run-api.mjs
 node tests/run-provider.mjs
 ```
 
 Le test API démarre le build de production sur le port 8787 avec une nouvelle base isolée. Sauvegarde : npm run db:backup. Les fichiers de l’ancien starter Sites restent des références historiques ; les commandes npm dev/build/start utilisent désormais exclusivement Next.js et Node.
+
+La branche de développement **0.4.0-dev.1** prépare le login Microsoft 365, désactivé par défaut. Voir [configuration et recette Entra](docs/AUTHENTIFICATION-ENTRA-ID.md). Aucun changement de production ou du SSO GLPI.

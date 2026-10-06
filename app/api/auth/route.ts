@@ -4,6 +4,8 @@ import { sqlite, setupToken, transaction } from '@/db/raw';
 import { AuthError, COOKIE, checkOrigin, createSession, getMember, rateLimit, tokenHash } from '@/lib/auth';
 import { hashPassword, validPassword, verifyPassword } from '@/lib/password';
 import { authenticateLdap, ldapEnabled } from '@/lib/ldap';
+import { entraStatus, entraGuid } from '@/lib/entra-config';
+import { linkEntraIdentity, unlinkEntraIdentity } from '@/lib/entra';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -20,7 +22,8 @@ function password(value: unknown) {
 }
 type Account = { member_id: string; provider: string; password_hash: string | null; active: number; must_change: number };
 export async function GET() {
-  return reply({ setup: !sqlite().prepare('SELECT 1 FROM accounts LIMIT 1').get(), ldap: ldapEnabled(), me: await getMember() });
+  const me = await getMember();
+  return reply({ setup: !sqlite().prepare('SELECT 1 FROM accounts LIMIT 1').get(), ldap: ldapEnabled(), entra: entraStatus(), ...(me?.role === 'admin' ? { entraTenantId: process.env.ENTRA_TENANT_ID || '' } : {}), me });
 }
 export async function POST(request: Request) {
   try {
@@ -82,7 +85,7 @@ export async function POST(request: Request) {
     if (body.action === 'password') {
       rateLimit('password:' + me.id, 5, 15 * 60000);
       const account = db.prepare('SELECT * FROM accounts WHERE member_id=?').get(me.id) as Account;
-      if (account.provider !== 'local') throw new AuthError('Modifiez votre mot de passe dans votre annuaire d’entreprise.');
+      if (me.provider === 'entra' || !account || account.provider !== 'local') throw new AuthError('Modifiez votre mot de passe dans votre annuaire d’entreprise.');
       if (typeof body.current !== 'string' || body.current.length > 128 || !await verifyPassword(body.current, account.password_hash!)) throw new AuthError('Mot de passe actuel incorrect.', 403);
       const next = password(body.password);
       if (next === body.current) throw new AuthError('Choisissez un nouveau mot de passe.');
@@ -96,7 +99,35 @@ export async function POST(request: Request) {
     }
     if (me.must_change) throw new AuthError('Changez d’abord votre mot de passe provisoire.', 403);
     if (me.role !== 'admin') throw new AuthError('Action réservée à l’administrateur.', 403);
+    if (body.action === 'entraLink') {
+      linkEntraIdentity(clean(body.id), body.tenantId, body.objectId, me.id);
+      return reply({ ok: true });
+    }
+    if (body.action === 'entraUnlink') {
+      const id = clean(body.id);
+      if (id === me.id && me.provider === 'entra') throw new AuthError('Reconnectez-vous avec votre compte local avant de retirer votre propre accès Microsoft.');
+      unlinkEntraIdentity(id, me.id);
+      return reply({ ok: true });
+    }
+    if (body.action === 'account' && body.provider === 'entra') {
+      const address = email(body.email), name = clean(body.name, 100);
+      if (!name) throw new AuthError('Le nom est obligatoire.');
+      let tenantId: string, objectId: string;
+      try { tenantId = entraGuid(body.tenantId); objectId = entraGuid(body.objectId); }
+      catch { throw new AuthError('Tenant ID et Object ID Microsoft doivent être des UUID valides.'); }
+      if (process.env.ENTRA_TENANT_ID && tenantId !== entraGuid(process.env.ENTRA_TENANT_ID)) throw new AuthError('Ce tenant ne correspond pas au tenant Sumatoni configuré.');
+      transaction(tx => {
+        if (tx.prepare('SELECT 1 FROM members WHERE email=?').get(address)) throw new AuthError('Ce membre existe déjà. Utilisez son rattachement Microsoft pour conserver ses prestations.', 409);
+        if (tx.prepare('SELECT 1 FROM entra_identities WHERE tenant_id=? AND object_id=?').get(tenantId, objectId)) throw new AuthError('Cette identité Microsoft est déjà rattachée.', 409);
+        const id = crypto.randomUUID(), now = new Date().toISOString();
+        tx.prepare("INSERT INTO members(id,email,name,role,active,created_at) VALUES (?,?,?,'partner',1,?)").run(id, address, name, now);
+        tx.prepare('INSERT INTO entra_identities VALUES (?,?,?,?,?)').run(id, tenantId, objectId, me.id, now);
+        tx.prepare("INSERT INTO entra_identity_events(member_id,actor_id,action,tenant_id,object_id,created_at) VALUES (?,?,'link',?,?,?)").run(id, me.id, tenantId, objectId, now);
+      });
+      return reply({ ok: true });
+    }
     if (body.action === 'account') {
+      if (body.provider !== undefined && !['local','ldap'].includes(body.provider)) throw new AuthError('Type de compte non valide.');
       const address = email(body.email), name = clean(body.name, 100), provider = body.provider === 'ldap' ? 'ldap' : 'local';
       const login = provider === 'local' ? address : clean(body.login).toLowerCase();
       if (!name || !login || (provider === 'ldap' && !/^[a-z0-9._@\\-]+$/i.test(login))) throw new AuthError('Nom et identifiant valides obligatoires.');

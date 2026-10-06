@@ -1,48 +1,82 @@
-# SumaTime — faisabilité de la connexion Microsoft Entra ID
+# SumaTime — connexion Microsoft Entra ID
 
-Étude du 7 octobre 2026. Le propriétaire confirme que les prestataires utilisent des comptes Microsoft 365 Sumatoni et que le SSO GLPI est déjà configuré. Périmètre : ajouter la connexion Entra à SumaTime. Aucun changement GLPI ou Microsoft 365 prévu et aucune configuration Entra modifiée pendant cette étude.
+Version de développement **0.4.0-dev.1**, préparée sur CT-ANT le 7 octobre 2026. Aucune mise en production et aucun changement GLPI ou Microsoft 365 réalisés. Les prestataires utilisent les comptes Microsoft 365 Sumatoni. Le SSO GLPI existe déjà et reste indépendant.
 
-## Conclusion
+## Comportement livré
 
-Intégration réalisable sans refondre le calendrier, les prestations ou la facturation. Le code actuel possède déjà des membres, des rôles et des sessions serveur. Le travail consiste à ajouter une méthode de connexion OIDC et à adapter le modèle des comptes, actuellement limité à local/ldap. Ce n’est pas une application à recommencer.
+Quand les paramètres serveur sont complets et `ENTRA_ENABLED=true`, la page de connexion propose **Se connecter avec Microsoft**. La session Microsoft du navigateur peut être réutilisée ; MFA et accès conditionnel restent décidés par le tenant. **Choisir un autre compte Microsoft** permet de sortir d’une session Microsoft qui ne correspond pas au compte Sumatoni attendu.
 
-Expérience souhaitée : bouton « Se connecter avec Microsoft », connexion avec le compte Microsoft 365 Sumatoni, puis accès au même membre et à son historique. La session Microsoft existante peut éviter de ressaisir le mot de passe, selon les politiques MFA et de session du tenant.
+Les accès locaux et LDAP restent disponibles. Si Microsoft est désactivé ou mal configuré, son bouton est masqué et l’accès habituel continue de fonctionner. Une indisponibilité Microsoft pendant la connexion revient sur le login avec un message compréhensible. La configuration complète signifie que les paramètres sont renseignés, pas qu’une connexion réelle au tenant a déjà été validée.
 
-## Architecture retenue
+Dans **Équipe**, l’administrateur peut rattacher Microsoft à un membre existant, créer un nouveau partenaire Microsoft sans mot de passe SumaTime, ou retirer le rattachement. Les prestations, le rôle, le forfait de déplacement et la connexion API GLPI restent associés au même `member_id`. Aucun compte administrateur n’est créé automatiquement. L’adresse e-mail n’est jamais utilisée pour fusionner automatiquement deux comptes : l’identité autorisée est le couple `tenant_id` + `object_id`. [Référence Microsoft des identifiants](https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference).
 
-Application Entra dédiée à SumaTime, limitée au tenant Sumatoni. Inscriptions et identifiants distincts pour le test et la production. Flux OIDC par code d’autorisation avec PKCE, state et nonce, traité côté serveur par une bibliothèque maintenue. Contrôler signature, tenant, émetteur, audience, expiration et nonce.
+Un membre connecté avec Microsoft ne reçoit pas de formulaire de changement de mot de passe Microsoft. Se déconnecter de SumaTime ne déconnecte pas les mails ou les autres applications Microsoft. Conserver un administrateur local de secours et son mot de passe dans le coffre habituel.
 
-Identité durable : couple tenant ID + object ID (tid, oid), rattaché explicitement au member_id existant. Conserver l’historique, les tarifs, forfaits et connexions GLPI personnelles. Ne pas fusionner automatiquement les comptes sur un simple e-mail. Ajouter les identités externes et adapter accounts/getMember/sessions pour Entra ; le fournisseur courant et Mon compte doivent refléter la connexion Microsoft sans proposer de changer un mot de passe Microsoft dans SumaTime.
+## Architecture et protections
 
-Rôles actuels conservés : prestataire et administrateur. Accès aux utilisateurs assignés ; aucun administrateur créé automatiquement sur la seule base du domaine e-mail. Garder un administrateur local de secours. Un compte désactivé dans SumaTime reste refusé après connexion Microsoft.
+- Client serveur confidentiel, mono-tenant, flux Authorization Code + PKCE S256, scopes `openid profile email`. Aucun appel Graph et aucun refresh token demandé.
+- `openid-client` **6.8.8**, signature RS256 du jeton d’identité vérifiée avec les clés JWKS, émetteur exact, audience, expiration, nonce, tenant et Object ID contrôlés.
+- `state` aléatoire et code d’autorisation liés à un cookie navigateur HttpOnly / SameSite=Lax. PKCE et nonce conservés côté serveur, dix minutes maximum, consommés une seule fois avant l’échange de code. Un retour rejoué ou provenant d’un autre navigateur est refusé.
+- Endpoints limités à HTTPS sur `login.microsoftonline.com`. Aucun paramètre de requête ne peut remplacer le tenant, l’URI de retour ou l’émetteur. Aucun contournement TLS en code applicatif.
+- Cookie de session HttpOnly, SameSite=Lax et Secure en HTTPS. Session Microsoft d’une heure par défaut, limitée aussi par l’expiration du jeton ; pas de conservation des jetons Microsoft dans SQLite ou le navigateur.
+- Migration additive `0008_entra_auth.sql`. `accounts` local/LDAP reste inchangé. Les tables `entra_identities`, `entra_sessions` et `entra_flows` isolent les nouvelles identités et sessions. `entra_identity_events` trace les rattachements et retraits avec l’administrateur qui les a effectués.
+- Rattachements réservés aux administrateurs, protégés contre CSRF et doublons. Une identité Microsoft ne peut appartenir à deux membres. Il faut retirer un ancien rattachement avant de le remplacer.
+- Un membre désactivé ne peut pas se reconnecter. Désactivation dans SumaTime et retrait du rattachement coupent les sessions concernées. Une session Microsoft révoquée ne peut jamais redevenir une session locale par simple absence de rattachement.
+- Désactiver le connecteur, rendre sa configuration incomplète ou changer de tenant bloque immédiatement les anciennes sessions Microsoft. Les comptes locaux ne dépendent pas de la disponibilité Microsoft.
 
-## Prérequis
+Supprimer une assignation ou désactiver un utilisateur **seulement dans Entra** n’annule pas instantanément une session SumaTime existante. Elle expire au plus tard après la durée configurée ou l’expiration du jeton. Pour un départ urgent : désactiver aussi le membre dans SumaTime, ou retirer son rattachement. Pas de CAE ni de déconnexion Microsoft globale dans cette première version.
 
-- Tenant ID Sumatoni et inscription d’application autorisée dans Entra.
-- Client ID, URI de retour exacte, configuration serveur et credential applicatif protégé ; préférer un certificat pour la production quand le client retenu le permet.
-- Pour une connexion seule : scopes openid/profile/email, sans permission de lecture des mails et sans accès Graph étendu.
-- HTTPS reconnu sur les appareils des prestataires. Les adresses peuvent rester privées, atteignables depuis le réseau/VPN ; les navigateurs et le serveur doivent joindre les endpoints Microsoft requis. L’authentification ne remplace pas l’accès réseau.
-- Utilisateur pilote et association contrôlée avec son membre existant. Contrôler les licences seulement pour les options supplémentaires retenues : accès conditionnel et assignation par groupes notamment.
+## Paramètres serveur
 
-## Travail à réaliser
+Dans le fichier d’environnement privé de **développement** :
 
-1. Préparer sur CT-ANT un bouton Microsoft et les routes de démarrage/retour OIDC, avec configuration facultative.
-2. Ajouter le rattachement d’identité Entra aux membres existants, adapter le compte et les sessions, conserver les droits actuels et le secours local.
-3. Configurer l’inscription Entra de test ; vérifier PC/téléphone, session Microsoft réutilisée, MFA, annulation et refus d’un autre tenant/utilisateur non autorisé.
-4. Vérifier absence de doublons et conservation des prestations, exports, chrono et connexion API GLPI personnelle.
-5. Publier progressivement après sauvegarde avec possibilité de revenir à la connexion actuelle.
+```dotenv
+APP_URL=http://localhost:5173
+ENTRA_ENABLED=false
+ENTRA_TENANT_ID=<Directory-tenant-ID-Sumatoni>
+ENTRA_CLIENT_ID=<Application-client-ID-SumaTime-Dev>
+ENTRA_CLIENT_SECRET=<valeur-du-secret>
+ENTRA_SESSION_MINUTES=60
+```
 
-Les appels SumaTime vers GLPI continuent d’utiliser leur mécanisme existant de jeton personnel. Ajouter le SSO SumaTime ne les remplace pas implicitement et ne nécessite pas de reconfigurer le SSO GLPI déjà en place.
+`APP_URL` doit contenir seulement l’origine, sans chemin, paramètres ou identifiants. HTTPS est exigé hors localhost / loopback. Durée acceptée : 15 à 240 minutes. Secret exclusivement sur le serveur ; ne pas le mettre dans Git, le JavaScript navigateur, une capture d’écran ou une conversation. Protéger les fichiers de configuration et SQLite par les permissions du compte de service. Le premier administrateur doit être créé localement avant toute connexion Microsoft.
 
-## Recette et fin d’accès
+L’URI de retour est calculée, sans réglage supplémentaire : **`APP_URL/api/auth/entra/callback`**. En localhost ci-dessus : `http://localhost:5173/api/auth/entra/callback`.
 
-Tester les claims et retours invalides, les identités non assignées, la désactivation, l’expiration et l’absence de Microsoft. Les sessions SumaTime sont actuellement de 12 heures : retirer un accès Entra bloque les nouvelles connexions mais n’annule pas instantanément un cookie applicatif déjà émis. Définir une durée/renouvellement adaptée et une révocation des sessions locales pour un départ urgent ; mesurer le délai réel.
+La prévisualisation CT-ANT utilise actuellement `http://192.168.10.131:5174`. Cette adresse HTTP de réseau privé ne convient pas pour activer Microsoft. Pour la recette réelle, prévoir une URL HTTPS de développement reconnue par les appareils, ou un tunnel localhost avec `APP_URL` correspondant. Ne pas activer Entra avec l’adresse HTTP actuelle. La page Équipe permet néanmoins de préparer les rattachements lorsque les identifiants seront connus.
 
-## Sources officielles
+## À préparer dans Microsoft, quand disponible
 
-- [Microsoft : tenant et audience de l’application](https://learn.microsoft.com/en-us/entra/identity-platform/single-and-multi-tenant-apps)
-- [Microsoft : code d’autorisation et PKCE](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow)
-- [Microsoft : identifiants oid/tid et claims](https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference)
-- [Microsoft : URI de retour](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url)
+1. **Entra ID → Inscriptions d’applications → Nouvelle inscription**, nom `SumaTime Dev`, comptes de l’annuaire Sumatoni uniquement. Garder une inscription distincte pour la future production. Relever **ID d’application (client)** et **ID de l’annuaire (tenant)**. [Procédure Microsoft](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app).
+2. **Authentification → Ajouter une plateforme → Web**, URI de retour exacte de développement. Ne pas sélectionner SPA, ne pas activer les flux implicites ou le client public. [URI de retour](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url).
+3. **Certificats et secrets → Nouveau secret client** : conserver sa **Valeur**, pas son ID ; noter son échéance dans le coffre et prévoir son renouvellement. Ce build utilise un secret client ; l’authentification par certificat applicatif reste une évolution, pas une fonctionnalité implémentée. [Credentials applicatifs](https://learn.microsoft.com/en-us/entra/identity-platform/how-to-add-credentials).
+4. Les seuls scopes demandés sont `openid`, `profile`, `email`. SumaTime n’utilise pas `Mail.Read` ou `User.Read`. Respecter la politique de consentement du tenant ; aucune lecture des mails n’est requise.
+5. Dans l’application d’entreprise, exiger l’assignation et assigner les utilisateurs pilotes. Consentement administrateur selon cette configuration/politique. L’assignation par utilisateur suffit pour commencer ; les options de groupe dépendent des licences. [Assignations Microsoft](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/assign-user-or-group-access-portal).
+6. **Entra → Utilisateurs → pilote → ID d’objet**. Dans SumaTime **Équipe → membre existant → Rattacher Microsoft**, recopier Tenant ID et cet Object ID. Vérifier le membre choisi : cela détermine l’historique et les droits auxquels le compte Microsoft aura accès.
+7. Renseigner l’environnement de développement, mettre `ENTRA_ENABLED=true`, redémarrer **uniquement la prévisualisation**, puis effectuer la recette ci-dessous. Les secrets ne sont jamais demandés dans le chat.
 
-État : étude et préparation du périmètre, connexion Entra SumaTime non implémentée et non activée.
+## Recette réelle restant à effectuer
+
+Quand Microsoft sera configuré : connexion du pilote sur PC et téléphone, session Microsoft déjà ouverte, MFA si applicable, choix d’un autre compte, annulation, accès refusé à un utilisateur non rattaché, visibilité limitée du partenaire, même historique qu’en local, calendrier, chrono, export et tickets GLPI. Vérifier la déconnexion SumaTime, l’expiration, le retrait du rattachement et le compte local de secours. Aucune validation réelle Microsoft n’a été revendiquée avec le simulateur.
+
+## Vérifications automatisées
+
+Après compilation, depuis CT-ANT :
+
+```bash
+npm run build
+npm run test:entra
+node --import=tsx --test --test-concurrency=2 tests/*.test.mjs
+node tests/run-api.mjs
+node tests/run-provider.mjs
+```
+
+La recette Entra lance Next sur le port 8788 et un simulateur Microsoft signé RS256 sur 8791, avec une base isolée. Le shim de réseau est importé explicitement dans ce **processus de test seulement** : aucun réglage du serveur applicatif ne permet de rediriger Microsoft vers un fournisseur simulé. Les recettes API / prestataire utilisent 8787 / 8790 et leurs propres bases ; les exécuter séparément si les ports sont occupés.
+
+Les codes d’autorisation sont exclus du journal des requêtes Next en développement. À la future installation derrière un reverse proxy, exclure également les paramètres de la route callback des journaux d’accès du proxy. Les sauvegardes contiennent les rattachements et les sessions : les protéger comme la base. Ne pas transporter `.env`, `data`, les jetons GLPI ou une base dans une archive de release.
+
+Vérifications réalisées le 7 octobre 2026 : build, TypeScript et ESLint ciblé réussis ; **83 tests unitaires / DOM**, **354 contrôles API Entra**, quatre redémarrages de contrôle de disponibilité / tenant / secours local, **199 assertions API métier** et **251 assertions prestataire / GLPI**. Rendus et accès local vérifiés en navigateur à 390 × 844 et 1280 × 900 sur une base de recette distincte.
+
+## État et livraison
+
+Fonctionnalité développée et testée en simulation. Prévisualisation CT-ANT seulement, Entra désactivé en attente de la configuration Microsoft. Aucun déploiement de production effectué. La connexion réelle et la mise en production feront l’objet d’une recette ultérieure après configuration du tenant et validation du propriétaire.

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 const runtimeRoot = process.env.QA_RUNTIME_ROOT || '.sites-runtime';
 mkdirSync(runtimeRoot, { recursive: true });
 const directory = mkdtempSync(resolve(runtimeRoot, 'accounts-qa-'));
-const env = { ...process.env, DATABASE_PATH: resolve(directory, 'qa.sqlite'), SETUP_TOKEN: randomBytes(32).toString('hex'), APP_URL: 'http://127.0.0.1:8787', TEST_URL: 'http://127.0.0.1:8787', LDAP_ENABLED: 'false', NEXT_TELEMETRY_DISABLED: '1' };
+const env = { ...process.env, DATABASE_PATH: resolve(directory, 'qa.sqlite'), SETUP_TOKEN: randomBytes(32).toString('hex'), APP_URL: 'http://127.0.0.1:8787', TEST_URL: 'http://127.0.0.1:8787', ENTRA_ENABLED: 'false', LDAP_ENABLED: 'false', NEXT_TELEMETRY_DISABLED: '1' };
 const serverArgs = existsSync('.next/standalone/server.js') ? ['.next/standalone/server.js'] : ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '--port', '8787'];
 const child = spawn(process.execPath, serverArgs, { env: { ...env, HOSTNAME: '127.0.0.1', PORT: '8787' }, stdio: ['ignore','pipe','pipe'] });
 let logs = '';

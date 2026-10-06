@@ -1,5 +1,13 @@
 # Versions de Sumatoni Time
 
+## v0.4.0-dev.1 — développement, 7 octobre 2026
+
+- Connexion Microsoft 365 Sumatoni par Entra ID, facultative et désactivée par défaut. Flux serveur OIDC avec PKCE et validation des jetons signés.
+- Rattachement explicite aux membres existants, nouveaux partenaires Microsoft sans mot de passe SumaTime, retrait d’identité et révocation des sessions Microsoft. Historique, rôles et accès locaux/LDAP conservés.
+- Bouton Microsoft, choix d’un autre compte, messages de refus et compte Microsoft sans formulaire de mot de passe local.
+- Durée de session Microsoft limitée ; compte local de secours disponible si Microsoft est absent. Guide de configuration et simulateur signé pour la recette.
+- CT-ANT / prévisualisation uniquement. Configuration Microsoft et recette réelle à suivre ; aucune mise en production.
+
 ## v0.3.0 — 5 octobre 2026
 
 - Calendrier : déplacement, redimensionnement, annulation avec contrôle de version et suppression confirmée. Les prestations facturées restent protégées.
