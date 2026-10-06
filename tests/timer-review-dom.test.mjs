@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { JSDOM } from 'jsdom';
+import React, {act} from 'react';
+const dom=new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>',{url:'http://127.0.0.1:5174/'});
+for(const name of ['window','document','navigator','HTMLElement','HTMLButtonElement','HTMLInputElement','HTMLTextAreaElement','Node','Element','DocumentFragment','MutationObserver','getComputedStyle','Event','CustomEvent','MouseEvent','NodeFilter'])Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:dom.window[name]});
+globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+globalThis.requestAnimationFrame=cb=>setTimeout(()=>cb(Date.now()),0);globalThis.cancelAnimationFrame=clearTimeout;
+const {createRoot}=await import('react-dom/client');
+const {TimerReview}=await import('../app/workday-panel.tsx');
+const wait=()=>new Promise(r=>setTimeout(r,20));
+function input(element,value){Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype,'value').set.call(element,value);element.dispatchEvent(new dom.window.Event('input',{bubbles:true}));element.dispatchEvent(new dom.window.Event('change',{bubbles:true}));}
+test('forgotten timer exposes date and exact minute inputs, blocks invalid corrections and keeps edits after save refusal',async()=>{
+ const work={today:'2026-09-22',weekStart:'2026-09-21',week:[],recent:[],segments:[],warning:'Ce chronomètre dépasse 24 heures.',timer:{id:'timer',client:'ARRG',ticket:'GLPI-1014',description:'Description conservée',on_site:0,started_at:Date.parse('2026-09-20T07:07:00Z'),stopped_at:Date.parse('2026-09-22T08:22:00Z'),version:1}};
+ const actions=[];let closed=false;const root=createRoot(document.getElementById('root'));
+ await act(async()=>{root.render(React.createElement(TimerReview,{work,busy:false,error:'',onClose:()=>{closed=true;},onAction:async(action,extra)=>{actions.push({action,extra});return false;}}));await wait();});
+ const save=()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Enregistrer la prestation'));
+ assert.equal(document.querySelector('input[type=date]').value,'2026-09-20');assert.equal(document.querySelectorAll('input[type=text]').length,2);assert.equal(save().disabled,true);
+ await act(async()=>{const inputs=document.querySelectorAll('input[type=text]');input(inputs[0],'09:07');input(inputs[1],'10:22');await wait();});
+ assert.equal(save().disabled,false);
+ await act(async()=>{document.querySelector('form').dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await wait();});
+ assert.deepEqual(actions[0],{action:'save',extra:{description:'Description conservée',segments:[{date:'2026-09-20',start:'09:07',end:'10:22'}]}});assert.equal(closed,false);assert.equal(document.querySelector('input[type=text]').value,'09:07');
+ await act(async()=>{[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Ajouter une journée')).click();await wait();});
+ assert.equal(save().disabled,true,'incomplete second day disables save');
+ await act(async()=>{const inputs=document.querySelectorAll('input[type=text]');input(inputs[2],'11:00');input(inputs[3],'12:00');await wait();});
+ assert.equal(save().disabled,true,'duplicate date disables save');assert.match(document.body.textContent,/qu’une fois/);
+ await act(async()=>{input(document.querySelectorAll('input[type=date]')[1],'2026-09-21');await wait();});assert.equal(save().disabled,false);
+ await act(async()=>{input(document.querySelectorAll('input[type=text]')[3],'10:00');await wait();});assert.equal(save().disabled,true,'invalid end cannot be hidden by another valid day');
+ await act(async()=>{root.unmount();await wait();});
+});

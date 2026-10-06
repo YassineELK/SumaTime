@@ -7,6 +7,7 @@ import { billedMinutes, clockTime, duration, locationLabel } from '@/lib/busines
 import type { Entry, EntrySeed, State, Workday } from '@/lib/types';
 import { addDays } from '@/lib/calendar';
 import { ticketBadge } from '@/lib/ticket-selection';
+import { brusselsMoment, reviewTimerSegments } from '@/lib/workday';
 
 const day = (date: string, full = false) => new Date(date + 'T12:00:00Z').toLocaleDateString('fr-BE', { timeZone: 'UTC', weekday: full ? 'long' : 'short', day: 'numeric', ...(full ? { month: 'long' } : {}) });
 export type QuickOpen = (seed?: EntrySeed | null, mode?: 'entry' | 'timer') => void;
@@ -22,16 +23,23 @@ export function TimerReview({ work, busy, error, onClose, onAction }: { work: Wo
   const t = work.timer!;
   const [discard, setDiscard] = useState(false);
   const [description, setDescription] = useState(t.description);
-  const [segments, setSegments] = useState(work.segments.map(s => ({ date: s.date, start: clockTime(s.start), end: s.end === 1440 ? '00:00' : clockTime(s.end) })));
-  const mins = (s: string) => Number(s.slice(0,2))*60+Number(s.slice(3));
-  const real = segments.reduce((n,s) => n + (s.end === '00:00' ? 1440 : mins(s.end)) - mins(s.start),0);
-  const bill = segments.reduce((n,s) => n + Math.ceil(((s.end === '00:00' ? 1440 : mins(s.end))-mins(s.start))/15)*15,0);
-  return <Dialog open onOpenChange={open => { if (!open && !busy) onClose(); }}><DialogContent className="calendar-dialog quick-dialog" onInteractOutside={e => e.preventDefault()}><DialogTitle>Vérifier mon intervention</DialogTitle><DialogDescription>Début arrondi au quart inférieur, fin au supérieur. Horaires ajustables à la minute. {t.client} · {t.ticket} · {locationLabel(t.on_site)}</DialogDescription>
+  const manual = !work.segments.length;
+  const firstDate = brusselsMoment(t.started_at).date;
+  const lastDate = brusselsMoment(t.stopped_at || t.started_at).date;
+  const [segments, setSegments] = useState(() => manual ? [{ date: firstDate, start: '', end: '' }] : work.segments.map(s => ({ date: s.date, start: clockTime(s.start), end: s.end === 1440 ? '00:00' : clockTime(s.end) })));
+  let checked: ReturnType<typeof reviewTimerSegments> = [];
+  let correctionError = '';
+  try { checked = reviewTimerSegments(t.started_at, t.stopped_at || t.started_at, segments, work.today); } catch (e) { if (segments.every(s => s.date && s.start && s.end)) correctionError = (e as Error).message; }
+  const real = checked.reduce((n,s) => n + s.end - s.start, 0);
+  const bill = checked.reduce((n,s) => n + billedMinutes(s.start, s.end), 0);
+  return <Dialog open onOpenChange={open => { if (!open && !busy) onClose(); }}><DialogContent className="calendar-dialog quick-dialog" onInteractOutside={e => e.preventDefault()}><DialogTitle>Vérifier mon intervention</DialogTitle><DialogDescription>{manual ? 'Saisissez les dates et horaires réellement travaillés. Le chrono sera remplacé par ces prestations.' : 'Début arrondi au quart inférieur, fin au supérieur. Horaires ajustables à la minute.'} {t.client} · {t.ticket} · {locationLabel(t.on_site)}</DialogDescription>
     {error && <div className="alert error" role="alert">{error}</div>}{work.warning && <div className="alert error" role="alert">{work.warning}</div>}
-    <form className="quick-form" onSubmit={async e => { e.preventDefault(); if (await onAction('save', { description, segments })) onClose(); }}>
-      {segments.map((s,i) => <div className="timer-segment" key={s.date}><strong>{day(s.date, true)}</strong><div className="time-fields"><TimeInput label="Début" disabled={busy} value={s.start} onChange={start => setSegments(prev => prev.map((x,j) => j===i ? {...x,start} : x))} /><span>→</span><TimeInput label="Fin" disabled={busy} value={s.end} onChange={end => setSegments(prev => prev.map((x,j) => j===i ? {...x,end} : x))} /></div></div>)}
-      {!!segments.length && <><p className="form-note">Début au quart inférieur et fin au quart supérieur. Ajustez les minutes si nécessaire. Chaque journée est enregistrée séparément.</p><label>Travail réalisé<textarea disabled={busy} rows={3} maxLength={2000} value={description} onChange={e => setDescription(e.target.value)} /></label><div className="duration-preview"><div><span>Durée saisie</span><strong>{real > 0 ? duration(real) : '—'}</strong></div><div><span>À facturer</span><strong>{bill > 0 ? duration(bill) : '—'}</strong></div></div></>}
-      <div className="quick-actions"><button type="button" className="secondary" disabled={busy} onClick={onClose}>Plus tard</button><button className="primary" disabled={busy || !segments.length || !(real>0)}><Check size={17} />Enregistrer la prestation</button></div>
+    <form className="quick-form" onSubmit={async e => { e.preventDefault(); if (!checked.length || busy) return; if (await onAction('save', { description, segments })) onClose(); }}>
+      {segments.map((s,i) => <div className="timer-segment" key={i}>{manual ? <label>Journée travaillée<input type="date" required disabled={busy} min={firstDate} max={lastDate < work.today ? lastDate : work.today} value={s.date} onChange={e => { const date = e.target.value; setSegments(prev => prev.map((x,j) => j===i ? {...x,date} : x)); }} /></label> : <strong>{day(s.date, true)}</strong>}<div className="time-fields"><TimeInput label="Début" disabled={busy} value={s.start} onChange={start => setSegments(prev => prev.map((x,j) => j===i ? {...x,start} : x))} /><span>→</span><TimeInput label="Fin" disabled={busy} value={s.end} onChange={end => setSegments(prev => prev.map((x,j) => j===i ? {...x,end} : x))} /></div>{manual && segments.length > 1 && <button type="button" className="text-button" disabled={busy} onClick={() => setSegments(prev => prev.filter((_,j) => j !== i))}>Retirer cette journée</button>}</div>)}
+      {manual && <button type="button" className="secondary" disabled={busy || segments.length >= 31} onClick={() => setSegments(prev => [...prev, { date: prev.at(-1)?.date || firstDate, start: '', end: '' }])}><Plus size={16} />Ajouter une journée</button>}
+      {!!segments.length && <><p className="form-note">{manual ? 'Aucun temps oublié n’est facturé automatiquement. Suggestions au quart d’heure ; saisie précise au clavier. 00:00 en fin signifie minuit. Une seule plage par journée.' : 'Début au quart inférieur et fin au quart supérieur. Ajustez les minutes si nécessaire. Chaque journée est enregistrée séparément.'}</p><label>Travail réalisé<textarea disabled={busy} rows={3} maxLength={2000} value={description} onChange={e => setDescription(e.target.value)} /></label><div className="duration-preview"><div><span>Durée saisie</span><strong>{real > 0 ? duration(real) : '—'}</strong></div><div><span>À facturer</span><strong>{bill > 0 ? duration(bill) : '—'}</strong></div></div></>}
+      {correctionError && <div className="alert error" role="alert">{correctionError}</div>}
+      <div className="quick-actions"><button type="button" className="secondary" disabled={busy} onClick={onClose}>Plus tard</button><button className="primary" disabled={busy || !checked.length || !(real>0)}><Check size={17} />Enregistrer la prestation</button></div>
       <button type="button" className="text-button timer-delete" disabled={busy} onClick={() => setDiscard(true)}><Trash2 size={14} />Supprimer ce chronomètre</button>{discard && <div className="inline-confirm"><p>Ce temps ne sera pas enregistré. Supprimer le chronomètre ?</p><div><button type="button" className="secondary" disabled={busy} onClick={() => setDiscard(false)}>Conserver</button><button type="button" className="secondary" disabled={busy} onClick={async () => { if (await onAction('discard')) onClose(); }}>Confirmer la suppression</button></div></div>}
     </form></DialogContent></Dialog>;
 }

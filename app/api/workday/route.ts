@@ -1,7 +1,7 @@
 import { getMember, checkOrigin, AuthError } from '@/lib/auth';
 import { sqlite, transaction } from '@/db/raw';
-import { brusselsToday, parseTime } from '@/lib/business';
-import { timerSegments } from '@/lib/workday';
+import { brusselsToday } from '@/lib/business';
+import { timerSegments, reviewTimerSegments } from '@/lib/workday';
 import type { WorkTimer } from '@/lib/types';
 import { validateGlpiTicketSelection } from '@/lib/glpi';
 import { PENDING_TICKET_LABEL, validGlpiTicketId } from '@/lib/ticket-selection';
@@ -79,18 +79,9 @@ export async function POST(request: Request) {
         if (!result.changes) throw new AuthError('Ce chronomètre a changé. Actualisez avant de le supprimer.', 409);
       } else if (body.action === 'save') {
         if (!timer.stopped_at) throw new AuthError('Arrêtez le chronomètre avant de vérifier les horaires.');
-        let segments; try { segments = timerSegments(timer.started_at, timer.stopped_at); } catch (e) { throw new AuthError((e as Error).message); }
-        if (body.segments !== undefined) {
-          if (!Array.isArray(body.segments) || body.segments.length !== segments.length) throw new AuthError('Les journées du chronomètre doivent être conservées.');
-          segments = segments.map((original, index) => {
-            const value = body.segments[index];
-            if (!value || value.date !== original.date || value.date > brusselsToday()) throw new AuthError('Journée invalide.');
-            let start: number, end: number;
-            try { start = parseTime(value.start); end = value.end === '00:00' ? 1440 : parseTime(value.end); } catch { throw new AuthError('Saisissez les heures au format HH:MM.'); }
-            if (end <= start) throw new AuthError('La fin doit être après le début.');
-            return { date: original.date, start, end };
-          });
-        }
+        let segments;
+        try { segments = reviewTimerSegments(timer.started_at, timer.stopped_at, body.segments, brusselsToday()); }
+        catch (e) { throw new AuthError((e as Error).message); }
         if (typeof body.description !== 'string' || body.description.length > 2000) throw new AuthError('La description doit faire au maximum 2 000 caractères.');
         const ids = transaction(db => {
           const live = current(me.id);

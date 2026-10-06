@@ -65,6 +65,28 @@ const midnight={...timer,id:randomUUID(),ticket:'MIDNIGHT'};await call(alice,mid
 db.prepare('UPDATE work_timers SET started_at=?,stopped_at=? WHERE id=?').run(Date.parse('2026-09-13T21:45:00Z'),Date.parse('2026-09-13T22:15:00Z'),midnight.id);
 const split=await call(alice,{action:'save',id:midnight.id,version:1,description:'Deux journées'});equal(split.entry_ids.length,2);
 equal(db.prepare('SELECT COUNT(*) AS n FROM travel_days WHERE member_id=?').get(aliceId).n,3);
+// A forgotten >24h timer is recoverable without deleting it or duplicating billing.
+const forgotten={...timer,id:randomUUID()};await call(alice,forgotten);
+db.prepare('UPDATE work_timers SET started_at=?,stopped_at=? WHERE id=?').run(Date.parse('2026-09-20T07:07:00Z'),Date.parse('2026-09-22T08:22:00Z'),forgotten.id);
+const forgottenWork=await call(alice);equal(forgottenWork.segments,[]);assert.match(forgottenWork.warning,/24 heures/);checks++;
+const repair={action:'save',id:forgotten.id,version:1,description:'Chrono oublié corrigé',segments:[{date:'2026-09-20',start:'09:07',end:'10:22'}]};
+await call(bob,repair,'/api/workday',409);
+await call(alice,{...repair,segments:undefined},'/api/workday',400);
+for(const segments of [[],[{...repair.segments[0],date:'2026-09-19'}],[repair.segments[0],repair.segments[0]],[{...repair.segments[0],end:'09:06'}]])await call(alice,{...repair,segments},'/api/workday',400);
+await call(alice,{...repair,version:9},'/api/workday',409);
+equal((await call(alice)).timer.id,forgotten.id);
+const repaired=await call(alice,repair);equal(repaired.entry_ids.length,1);
+equal((await call(alice,repair)).entry_ids,repaired.entry_ids);
+const repairEntry=db.prepare('SELECT * FROM entries WHERE id=?').get(repaired.entry_ids[0]);equal(repairEntry.start,547);equal(repairEntry.end,622);equal(repairEntry.ticket_source,'pending');equal(repairEntry.on_site,1);equal(repairEntry.hourly_rate_cents,12500);
+equal(db.prepare('SELECT COUNT(*) AS n FROM travel_days WHERE member_id=? AND client_id=? AND date=?').get(aliceId,client.id,'2026-09-20').n,1);
+equal((await call(alice)).timer,null);
+const forgottenConflict={...timer,id:randomUUID()};await call(alice,forgottenConflict);
+db.prepare('UPDATE work_timers SET started_at=?,stopped_at=? WHERE id=?').run(Date.parse('2026-09-19T07:00:00Z'),Date.parse('2026-09-21T08:00:00Z'),forgottenConflict.id);
+const countBefore=db.prepare('SELECT COUNT(*) AS n FROM entries').get().n;
+await call(alice,{...repair,id:forgottenConflict.id,segments:[{date:'2026-09-19',start:'09:00',end:'10:00'},repair.segments[0]]},'/api/workday',409);
+equal(db.prepare('SELECT COUNT(*) AS n FROM entries').get().n,countBefore);
+equal((await call(alice)).timer.id,forgottenConflict.id);
+await call(alice,{action:'discard',id:forgottenConflict.id,version:1});
 // Personal GLPI credentials and permission isolation.
 equal((await call(alice,null,'/api/glpi')).connected,false);
 await call(alice,null,'/api/glpi?tickets=1',409);
