@@ -15,8 +15,10 @@ test('Microsoft login is offered only when ready; fallback remains and safe call
   assert.equal(Boolean(document.querySelector('a[href="/api/auth/entra/start"]')),state==='ready');assert.ok(document.querySelector('input[autocomplete=username]'));assert.ok(document.querySelector('input[type=password]'));
   await act(async()=>{root.unmount();await wait();});
  }
- dom.reconfigure({url:'http://localhost:5173/login?entra_error=denied'});globalThis.fetch=async()=>({json:async()=>({setup:false,ldap:false,entra:'ready'})});const root=createRoot(document.getElementById('root'));
- await act(async()=>{root.render(React.createElement(Login));await wait();});assert.match(document.querySelector('[role=alert]').textContent,/n’a pas accès/);assert.equal(window.location.search,'');await act(async()=>{root.unmount();});
+ for(const code of ['denied','constructor','__proto__','unknown']){
+  dom.reconfigure({url:'http://localhost:5173/login?entra_error='+code});globalThis.fetch=async()=>({json:async()=>({setup:false,ldap:false,entra:'ready'})});const root=createRoot(document.getElementById('root'));
+  await act(async()=>{root.render(React.createElement(Login));await wait();});assert.match(document.querySelector('[role=alert]').textContent,code==='denied'?/n’a pas accès/:/a expiré/);assert.equal(window.location.search,'');await act(async()=>{root.unmount();});
+ }
 });
 test('Microsoft account explains who manages credentials and never offers a Microsoft password form',async()=>{
  const root=createRoot(document.getElementById('root'));await act(async()=>{root.render(React.createElement(AccountPanel,{me:{id:'alice',name:'Alice',email:'alice@example.test',provider:'entra'},onDone:()=>{}}));await wait();});
