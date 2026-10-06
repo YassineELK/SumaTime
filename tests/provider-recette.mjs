@@ -82,9 +82,9 @@ equal(db.prepare('SELECT COUNT(*) AS n FROM travel_days WHERE member_id=? AND cl
 equal((await call(alice)).timer,null);
 const forgottenConflict={...timer,id:randomUUID()};await call(alice,forgottenConflict);
 db.prepare('UPDATE work_timers SET started_at=?,stopped_at=? WHERE id=?').run(Date.parse('2026-09-19T07:00:00Z'),Date.parse('2026-09-21T08:00:00Z'),forgottenConflict.id);
-const countBefore=db.prepare('SELECT COUNT(*) AS n FROM entries').get().n;
+const repairCountBefore=db.prepare('SELECT COUNT(*) AS n FROM entries').get().n;
 await call(alice,{...repair,id:forgottenConflict.id,segments:[{date:'2026-09-19',start:'09:00',end:'10:00'},repair.segments[0]]},'/api/workday',409);
-equal(db.prepare('SELECT COUNT(*) AS n FROM entries').get().n,countBefore);
+equal(db.prepare('SELECT COUNT(*) AS n FROM entries').get().n,repairCountBefore);
 equal((await call(alice)).timer.id,forgottenConflict.id);
 await call(alice,{action:'discard',id:forgottenConflict.id,version:1});
 // Personal GLPI credentials and permission isolation.
