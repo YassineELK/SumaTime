@@ -1,6 +1,6 @@
 # Attribuer le rôle administrateur dans SumaTime
 
-Disponible à partir de la v0.4.3. Deux rôles : prestataire (ses propres prestations) et administrateur (toutes les prestations, modifications, exports, clients, facturation et gestion des comptes).
+Disponible en production depuis la v0.4.3, déployée le 7 octobre 2026. Deux rôles : prestataire (ses propres prestations) et administrateur (toutes les prestations, modifications, exports, clients, facturation et gestion des comptes).
 
 1. Pour une personne Microsoft, l’attribuer individuellement à SumaTime dans Entra avec Accès par défaut, puis lui faire effectuer sa première connexion pour créer son compte prestataire.
 2. Se connecter dans SumaTime avec un administrateur et ouvrir **Équipe**.

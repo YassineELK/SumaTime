@@ -1,5 +1,7 @@
 # SumaTime v0.4.3 — attribution du rôle administrateur
 
+Ce document conserve l’historique de développement et du premier refus de bascule. Le propriétaire a ensuite autorisé la v0.4.3 avec le libellé Prestataire ; **elle est maintenant déployée**. Voir [le compte rendu](DEPLOIEMENT-V0.4.3-2026-10-07.md).
+
 Demande du propriétaire : permettre qu’une employée administrative ait le rôle administrateur dans SumaTime, alors que l’écran ne proposait pas son attribution. Fonctionnalité développée sur CT-ANT, branche `codex/member-roles`, commit applicatif `ce13aba6201dc73832f28c2429f62a301f3e4efc`.
 
 ## Résultat utilisable en développement

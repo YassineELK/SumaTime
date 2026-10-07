@@ -7,7 +7,8 @@
 - Équipe : attribution et retrait explicites du rôle administrateur, avec confirmation des droits et reconnexion du membre.
 - Contrôle serveur réservé aux administrateurs actifs, protection du rôle de l’acteur et du dernier administrateur local de secours, refus des changements devenus obsolètes.
 - Historique des changements de rôle et révocation transactionnelle des sessions locales, LDAP et Microsoft ; données, comptes et identité Microsoft conservés.
-- Les nouveaux comptes Microsoft restent partenaires par défaut. Le rôle choisi dans SumaTime est conservé lors des reconnexions Microsoft.
+- Les nouveaux comptes Microsoft restent prestataires par défaut. Le rôle choisi dans SumaTime est conservé lors des reconnexions Microsoft.
+- Déployée après autorisation, sauvegardes avant/après et comparaison des données : deux membres, deux clients et 15 prestations conservés, aucun rôle existant modifié. HTTPS et démarrage OIDC vérifiés.
 
 ## v0.4.2 — 7 octobre 2026
 

@@ -1,6 +1,6 @@
 # SumaTime — comptes automatiques à partir des attributions Entra
 
-Version **0.4.2 déployée en production le 7 octobre 2026**, avec contrôle Graph et création automatique activés après autorisation. Voir [le compte rendu](DEPLOIEMENT-V0.4.2-2026-10-07.md). Ce guide remplace la proposition 0.4.1 fondée sur un rôle applicatif, refusée par le propriétaire. Aucun rôle personnalisé à créer pour cette version.
+Version **0.4.3 déployée en production le 7 octobre 2026**, avec contrôle Graph et création automatique activés après autorisation. Voir [le compte rendu](DEPLOIEMENT-V0.4.3-2026-10-07.md). Ce guide remplace la proposition 0.4.1 fondée sur un rôle applicatif, refusée par le propriétaire. Aucun rôle personnalisé à créer pour cette version.
 
 ## Fonctionnement pour l’administrateur et le prestataire
 
