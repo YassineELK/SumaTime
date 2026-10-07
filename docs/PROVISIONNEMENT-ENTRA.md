@@ -51,6 +51,10 @@ La migration `0009_entra_provision.sql` reste additive. Aucun remplacement de ba
 
 Tester Kiosk attribué, un utilisateur ordinaire non attribué, une deuxième connexion sans doublon, le retrait et la réattribution, le refus d’une action protégée après retrait, le compte administrateur existant et l’accès local de secours. Comparer les données avant/après. Les tests automatisés utilisent des simulateurs signés et des bases QA isolées ; ils ne remplacent pas la recette réelle avec les permissions du tenant.
 
+## Retour au code précédent après une future mise en production
+
+Si des comptes ont été créés automatiquement, désactiver Microsoft avant de revenir à v0.4.0, car cette version ne contrôle pas l’attribution Graph. Utiliser le compte local de secours et conserver la base courante. Ne pas restaurer une ancienne base au détriment des prestations enregistrées depuis.
+
 ## Références Microsoft
 
 - [Attributions d’une application et permission minimale Application.Read.All](https://learn.microsoft.com/en-us/graph/api/serviceprincipal-list-approleassignedto?view=graph-rest-1.0).

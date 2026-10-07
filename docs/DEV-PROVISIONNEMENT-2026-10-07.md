@@ -1,5 +1,7 @@
 # SumaTime 0.4.1 — approche par rôle refusée, non déployée
 
+Ce document conserve la proposition par rôle refusée. Le développement alternatif autorisé ensuite est décrit dans [le compte rendu des attributions Graph](DEV-ATTRIBUTIONS-ENTRA-2026-10-07.md).
+
 Le propriétaire souhaite que les personnes autorisées dans Entra disposent automatiquement d’un compte SumaTime. La fonctionnalité est développée sur CT-ANT, branche `codex/entra-login`, commit `0d5c30d6b9824627c1f4620075e2c7ff80bd82a7`.
 
 ## Périmètre précis
