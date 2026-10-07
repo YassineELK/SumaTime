@@ -24,7 +24,9 @@ Après bascule : 2 558 fichiers runtime vérifiés au manifeste ; 37 assets serv
 
 Tenant et Client ID fournis par le propriétaire configurés ; découverte OIDC du tenant validée sur TLS. L’Object ID fourni est rattaché explicitement au seul administrateur local existant. Le rôle, le mot de passe et l’historique sont conservés.
 
-Au moment de cette livraison, **Microsoft reste désactivé, en attente du secret client**. Le propriétaire peut le saisir sans affichage dans un terminal SSH :
+Le secret a ensuite été saisi par le propriétaire sur le serveur, puis **Microsoft a été activé pour le pilote**. Le redémarrage a conservé toutes les données, y compris le compte local. Les vérifications HTTPS du vrai démarrage OIDC passent : tenant, client, URI de retour, PKCE S256, cookie Secure/HttpOnly/SameSite et choix de compte. Un flux de contrôle a été annulé et consommé correctement. La connexion Microsoft interactive reste à effectuer par le propriétaire ; le secret ne peut être validé réellement qu’au retour de cette connexion.
+
+Pour installer ou renouveler le secret sans affichage dans un terminal SSH :
 
 ```powershell
 ssh -t -i "$env:USERPROFILE\.ssh\sumatoni_time_deploy_ed25519" root@192.168.87.224 /usr/local/sbin/sumatime-entra-secret
@@ -32,7 +34,7 @@ ssh -t -i "$env:USERPROFILE\.ssh\sumatoni_time_deploy_ed25519" root@192.168.87.2
 
 L’outil sauvegarde la configuration dans un répertoire privé, remplace atomiquement le secret et laisse `ENTRA_ENABLED=false`. Il ne redémarre pas le service et ne transmet jamais le secret dans la conversation. Le code de référence est `deploy/linux/set-entra-secret.py`.
 
-URI Web exacte à enregistrer dans Entra : `https://sumatime.home.sumatoni.be/api/auth/entra/callback`. La connexion Microsoft réelle et MFA restent à vérifier une fois le secret installé et Microsoft activé. L’accès local reste disponible. Le certificat autosigné est accepté par les contrôles serveur utilisant explicitement ce certificat, mais le navigateur intégré le refuse (`ERR_CERT_AUTHORITY_INVALID`) : effectuer le pilote dans un navigateur qui l’accepte, ou installer ultérieurement un certificat reconnu.
+URI Web exacte à enregistrer dans Entra : `https://sumatime.home.sumatoni.be/api/auth/entra/callback`. La connexion Microsoft réelle et MFA restent à vérifier avec le pilote. L’accès local reste disponible. Le certificat autosigné est accepté par les contrôles serveur utilisant explicitement ce certificat, mais le navigateur intégré le refuse (`ERR_CERT_AUTHORITY_INVALID`) : effectuer le pilote dans un navigateur qui l’accepte, ou installer ultérieurement un certificat reconnu.
 
 ## Retour arrière
 

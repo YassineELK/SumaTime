@@ -1,6 +1,6 @@
 # SumaTime — connexion Microsoft Entra ID
 
-Version **0.4.0**, déployée sur la production le 7 octobre 2026 à la demande du propriétaire. Le pilote Microsoft utilise désormais l’adresse HTTPS de production ; il attend le secret client puis une connexion réelle. Les données et comptes locaux sont conservés. Aucun changement du SSO GLPI. Voir [le compte rendu de déploiement](DEPLOIEMENT-V0.4.0-2026-10-07.md).
+Version **0.4.0**, déployée sur la production le 7 octobre 2026 à la demande du propriétaire. Le pilote Microsoft utilise désormais l’adresse HTTPS de production ; le secret est installé, Microsoft est activé et la connexion interactive réelle reste à vérifier. Les données et comptes locaux sont conservés. Aucun changement du SSO GLPI. Voir [le compte rendu de déploiement](DEPLOIEMENT-V0.4.0-2026-10-07.md).
 
 ## Comportement livré
 
