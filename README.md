@@ -1,6 +1,6 @@
 # Sumatoni Time
 
-Application web pour administrateur et partenaires : calendrier au quart d’heure, saisie client/ticket/horaires, arrondi supérieur par prestation, exports CSV internes, relevé client sans partenaire et relevé par partenaire avec totaux pour contrôler sa facture, modes sur site/à distance, tarifs horaires et forfait de déplacement quotidien par client et prestataire, verrouillage de facturation.
+Application web pour administrateur et prestataires : calendrier au quart d’heure, saisie client/ticket/horaires, arrondi supérieur par prestation, exports CSV internes, relevé client sans prestataire et relevé par prestataire avec totaux pour contrôler sa facture, modes sur site/à distance, tarifs horaires et forfait de déplacement quotidien par client et prestataire, verrouillage de facturation.
 
 Comptes locaux par e-mail/mot de passe. Active Directory / LDAP et Microsoft Entra ID optionnels. Aucun compte ChatGPT requis.
 

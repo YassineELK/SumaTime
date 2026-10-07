@@ -2,6 +2,8 @@
 
 ## v0.4.3 — gestion des rôles, 7 octobre 2026
 
+- Le rôle s’affiche désormais « Prestataire » dans l’équipe, le profil, le calendrier, les filtres et les exports. La valeur technique historique reste compatible avec les comptes et données existants.
+
 - Équipe : attribution et retrait explicites du rôle administrateur, avec confirmation des droits et reconnexion du membre.
 - Contrôle serveur réservé aux administrateurs actifs, protection du rôle de l’acteur et du dernier administrateur local de secours, refus des changements devenus obsolètes.
 - Historique des changements de rôle et révocation transactionnelle des sessions locales, LDAP et Microsoft ; données, comptes et identité Microsoft conservés.

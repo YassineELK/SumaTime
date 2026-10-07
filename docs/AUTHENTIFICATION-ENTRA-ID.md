@@ -1,10 +1,10 @@
 # SumaTime — connexion Microsoft Entra ID
 
-Version **0.4.2**, déployée le 7 octobre 2026 après autorisation du propriétaire. Microsoft et le contrôle des attributions individuelles Graph sont actifs sur l’adresse HTTPS de production ; les partenaires attribués peuvent recevoir leur compte à la première connexion. Le compte local, les droits existants et les 15 prestations sont conservés. Aucun changement du SSO GLPI. Voir [le compte rendu de déploiement](DEPLOIEMENT-V0.4.2-2026-10-07.md).
+Version **0.4.2**, déployée le 7 octobre 2026 après autorisation du propriétaire. Microsoft et le contrôle des attributions individuelles Graph sont actifs sur l’adresse HTTPS de production ; les prestataires attribués peuvent recevoir leur compte à la première connexion. Le compte local, les droits existants et les 15 prestations sont conservés. Aucun changement du SSO GLPI. Voir [le compte rendu de déploiement](DEPLOIEMENT-V0.4.2-2026-10-07.md).
 
-## Création automatique des partenaires
+## Création automatique des prestataires
 
-La version **0.4.2 en production** remplace l’approche par rôle de la 0.4.1, refusée et non déployée. Le mode optionnel `ENTRA_ACCESS_MODE=assignment` contrôle directement les attributions individuelles à l’application SumaTime via Microsoft Graph, y compris « Accès par défaut ». `ENTRA_AUTO_PROVISION=true` crée seulement des partenaires après confirmation de l’attribution. Les comptes existants conservent leur identité, leurs droits et leurs prestations. Voir [le guide de provisionnement](PROVISIONNEMENT-ENTRA.md). Le mode attribution et la création automatique sont activés en production après vérification des permissions réelles Graph.
+La version **0.4.2 en production** remplace l’approche par rôle de la 0.4.1, refusée et non déployée. Le mode optionnel `ENTRA_ACCESS_MODE=assignment` contrôle directement les attributions individuelles à l’application SumaTime via Microsoft Graph, y compris « Accès par défaut ». `ENTRA_AUTO_PROVISION=true` crée seulement des prestataires après confirmation de l’attribution. Les comptes existants conservent leur identité, leurs droits et leurs prestations. Voir [le guide de provisionnement](PROVISIONNEMENT-ENTRA.md). Le mode attribution et la création automatique sont activés en production après vérification des permissions réelles Graph.
 
 ## Comportement livré
 
@@ -12,7 +12,7 @@ Quand les paramètres serveur sont complets et `ENTRA_ENABLED=true`, la page de 
 
 Les accès locaux et LDAP restent disponibles. Si Microsoft est désactivé ou mal configuré, son bouton est masqué et l’accès habituel continue de fonctionner. Une indisponibilité Microsoft pendant la connexion revient sur le login avec un message compréhensible. La configuration complète signifie que les paramètres sont renseignés, pas qu’une connexion réelle au tenant a déjà été validée.
 
-Dans **Équipe**, l’administrateur peut rattacher Microsoft à un membre existant, créer un nouveau partenaire Microsoft sans mot de passe SumaTime, ou retirer le rattachement. Les prestations, le rôle, le forfait de déplacement et la connexion API GLPI restent associés au même `member_id`. Aucun compte administrateur n’est créé automatiquement. L’adresse e-mail n’est jamais utilisée pour fusionner automatiquement deux comptes : l’identité autorisée est le couple `tenant_id` + `object_id`. [Référence Microsoft des identifiants](https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference).
+Dans **Équipe**, l’administrateur peut rattacher Microsoft à un membre existant, créer un nouveau prestataire Microsoft sans mot de passe SumaTime, ou retirer le rattachement. Les prestations, le rôle, le forfait de déplacement et la connexion API GLPI restent associés au même `member_id`. Aucun compte administrateur n’est créé automatiquement. L’adresse e-mail n’est jamais utilisée pour fusionner automatiquement deux comptes : l’identité autorisée est le couple `tenant_id` + `object_id`. [Référence Microsoft des identifiants](https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference).
 
 Un membre connecté avec Microsoft ne reçoit pas de formulaire de changement de mot de passe Microsoft. Se déconnecter de SumaTime ne déconnecte pas les mails ou les autres applications Microsoft. Conserver un administrateur local de secours et son mot de passe dans le coffre habituel.
 
@@ -61,7 +61,7 @@ La prévisualisation CT-ANT utilise actuellement `http://192.168.10.131:5174`. C
 
 ## Recette réelle restant à effectuer
 
-Microsoft est configuré, ses permissions Graph ont été vérifiées et le démarrage OIDC HTTPS passe les contrôles. La recette interactive reste à effectuer : connexion du pilote sur PC et téléphone, session Microsoft déjà ouverte, MFA si applicable, choix d’un autre compte, annulation, accès refusé à un utilisateur non rattaché, visibilité limitée du partenaire, même historique qu’en local, calendrier, chrono, export et tickets GLPI. Vérifier la déconnexion SumaTime, l’expiration, le retrait du rattachement et le compte local de secours. Aucune validation réelle Microsoft n’a été revendiquée avec le simulateur.
+Microsoft est configuré, ses permissions Graph ont été vérifiées et le démarrage OIDC HTTPS passe les contrôles. La recette interactive reste à effectuer : connexion du pilote sur PC et téléphone, session Microsoft déjà ouverte, MFA si applicable, choix d’un autre compte, annulation, accès refusé à un utilisateur non rattaché, visibilité limitée du prestataire, même historique qu’en local, calendrier, chrono, export et tickets GLPI. Vérifier la déconnexion SumaTime, l’expiration, le retrait du rattachement et le compte local de secours. Aucune validation réelle Microsoft n’a été revendiquée avec le simulateur.
 
 ## Vérifications automatisées
 
@@ -83,4 +83,4 @@ Vérifications réalisées le 7 octobre 2026 : build, TypeScript et ESLint cibl�
 
 ## État et livraison
 
-La v0.4.2 est active en production, avec Graph et création automatique des partenaires. La prévisualisation CT-ANT conserve Entra désactivé. Vérifications v0.4.2 : 46 tests unitaires/DOM, 683 assertions Entra/Graph, 199 assertions API métier, 251 prestataire/GLPI, build et TypeScript réussis. Le runtime exact a validé le contrôle Graph réel et une session locale administrateur sur une copie privée de la base, sans remplacer la base active. Après déploiement, les 17 tables préexistantes ont été comparées, SQLite est intègre et 37 ressources HTTPS correspondent au paquet. La connexion interactive de Kiosk reste à effectuer ; aucun succès de cette connexion n’est revendiqué.
+La v0.4.2 est active en production, avec Graph et création automatique des prestataires. La prévisualisation CT-ANT conserve Entra désactivé. Vérifications v0.4.2 : 46 tests unitaires/DOM, 683 assertions Entra/Graph, 199 assertions API métier, 251 prestataire/GLPI, build et TypeScript réussis. Le runtime exact a validé le contrôle Graph réel et une session locale administrateur sur une copie privée de la base, sans remplacer la base active. Après déploiement, les 17 tables préexistantes ont été comparées, SQLite est intègre et 37 ressources HTTPS correspondent au paquet. La connexion interactive de Kiosk reste à effectuer ; aucun succès de cette connexion n’est revendiqué.

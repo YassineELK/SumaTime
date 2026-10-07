@@ -68,11 +68,11 @@ export async function GET(request: Request) {
       if (kind === 'partner') {
         const partnerId = url.searchParams.get('member') || (member.role === 'admin' ? '' : member.id);
         if (member.role !== 'admin' && partnerId !== member.id) throw new HttpError('Vous ne pouvez exporter que votre propre relevé.', 403);
-        if (!partnerId) throw new HttpError('Sélectionnez un partenaire et cliquez sur Appliquer avant de télécharger son relevé.');
+        if (!partnerId) throw new HttpError('Sélectionnez un prestataire et cliquez sur Appliquer avant de télécharger son relevé.');
         const partner = await db.prepare('SELECT name FROM members WHERE id=?').bind(partnerId).first<{ name: string }>();
-        if (!partner) throw new HttpError('Partenaire introuvable.', 404);
-        if (url.searchParams.get('status') || url.searchParams.get('q')?.trim()) throw new HttpError('Pour contrôler la facture du partenaire, choisissez Tous les statuts et videz la recherche, puis cliquez sur Appliquer. Cela permet de compter tous les déplacements de la période.');
-        if (!rows.length) throw new HttpError('Aucune prestation pour ce partenaire sur la période sélectionnée.');
+        if (!partner) throw new HttpError('Prestataire introuvable.', 404);
+        if (url.searchParams.get('status') || url.searchParams.get('q')?.trim()) throw new HttpError('Pour contrôler la facture du prestataire, choisissez Tous les statuts et videz la recherche, puis cliquez sur Appliquer. Cela permet de compter tous les déplacements de la période.');
+        if (!rows.length) throw new HttpError('Aucune prestation pour ce prestataire sur la période sélectionnée.');
         table = partnerStatement(rows, partner.name);
       } else if (clientExport) {
         const clientId = url.searchParams.get('client');
@@ -90,9 +90,9 @@ export async function GET(request: Request) {
           item.travel += row.travel_cents || 0; item.missingFee ||= row.travel_counted === 1 && row.travel_cents === null; item.trips += row.travel_counted;
           groups.set(key, item);
         }
-        table = [['Client', 'Partenaire', 'Mode de prestation', 'Prestations', 'Minutes réelles', 'Minutes facturables', 'Heures facturables', 'Montant prestations EUR', 'Déplacements', 'Forfait prestataire EUR'], ...[...groups.values()].map(g => [g.client, g.member, g.mode, g.count, g.real, g.bill, (g.bill / 60).toFixed(2).replace('.', ','), g.missingRate ? '' : (g.amount / 100).toFixed(2).replace('.', ','), g.trips, g.missingFee ? '' : (g.travel / 100).toFixed(2).replace('.', ',')])];
-      } else table = [['ID', 'Client', 'Ticket', 'Source ticket', 'Partenaire', 'Date', 'Début', 'Fin', 'Description', 'Minutes réelles', 'Minutes facturables', 'Heures facturables', 'Statut', 'Mode de prestation', 'Tarif horaire EUR', 'Montant prestations EUR', 'Déplacement compté', 'Forfait prestataire EUR'], ...rows.map(e => [e.id, e.client, e.ticket, e.ticket_source === 'glpi' ? 'GLPI vérifié' : e.ticket_source === 'pending' ? PENDING_TICKET_LABEL : 'Historique', e.member, e.date, clockTime(e.start), clockTime(e.end), e.description, e.end - e.start, billedMinutes(e.start, e.end), (billedMinutes(e.start, e.end) / 60).toFixed(2).replace('.', ','), e.billed ? 'Facturé' : 'À facturer', locationLabel(e.on_site), e.hourly_rate_cents === null ? '' : (e.hourly_rate_cents / 100).toFixed(2).replace('.', ','), serviceAmount(e.start, e.end, e.hourly_rate_cents) === null ? '' : (serviceAmount(e.start, e.end, e.hourly_rate_cents)! / 100).toFixed(2).replace('.', ','), e.travel_counted ? 'Oui' : 'Non', e.travel_cents === null ? '' : (e.travel_cents / 100).toFixed(2).replace('.', ',')])];
-      return new Response(csv(table), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="sumatoni-${kind === 'partner' ? 'releve-partenaire' : clientExport ? 'releve-client' : summary ? 'synthese' : 'detail'}-${from}-${to}.csv"`, 'Cache-Control': 'no-store' } });
+        table = [['Client', 'Prestataire', 'Mode de prestation', 'Prestations', 'Minutes réelles', 'Minutes facturables', 'Heures facturables', 'Montant prestations EUR', 'Déplacements', 'Forfait prestataire EUR'], ...[...groups.values()].map(g => [g.client, g.member, g.mode, g.count, g.real, g.bill, (g.bill / 60).toFixed(2).replace('.', ','), g.missingRate ? '' : (g.amount / 100).toFixed(2).replace('.', ','), g.trips, g.missingFee ? '' : (g.travel / 100).toFixed(2).replace('.', ',')])];
+      } else table = [['ID', 'Client', 'Ticket', 'Source ticket', 'Prestataire', 'Date', 'Début', 'Fin', 'Description', 'Minutes réelles', 'Minutes facturables', 'Heures facturables', 'Statut', 'Mode de prestation', 'Tarif horaire EUR', 'Montant prestations EUR', 'Déplacement compté', 'Forfait prestataire EUR'], ...rows.map(e => [e.id, e.client, e.ticket, e.ticket_source === 'glpi' ? 'GLPI vérifié' : e.ticket_source === 'pending' ? PENDING_TICKET_LABEL : 'Historique', e.member, e.date, clockTime(e.start), clockTime(e.end), e.description, e.end - e.start, billedMinutes(e.start, e.end), (billedMinutes(e.start, e.end) / 60).toFixed(2).replace('.', ','), e.billed ? 'Facturé' : 'À facturer', locationLabel(e.on_site), e.hourly_rate_cents === null ? '' : (e.hourly_rate_cents / 100).toFixed(2).replace('.', ','), serviceAmount(e.start, e.end, e.hourly_rate_cents) === null ? '' : (serviceAmount(e.start, e.end, e.hourly_rate_cents)! / 100).toFixed(2).replace('.', ','), e.travel_counted ? 'Oui' : 'Non', e.travel_cents === null ? '' : (e.travel_cents / 100).toFixed(2).replace('.', ',')])];
+      return new Response(csv(table), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="sumatoni-${kind === 'partner' ? 'releve-prestataire' : clientExport ? 'releve-client' : summary ? 'synthese' : 'detail'}-${from}-${to}.csv"`, 'Cache-Control': 'no-store' } });
     }
     const [clients, members] = await Promise.all([
       db.prepare(member.role === 'admin' ? 'SELECT * FROM clients ORDER BY active DESC, name COLLATE NOCASE' : 'SELECT id,name,active,color,glpi_entity_id,NULL AS hourly_rate_cents,NULL AS onsite_hourly_rate_cents FROM clients ORDER BY active DESC,name COLLATE NOCASE').all(),
@@ -145,7 +145,7 @@ export async function POST(request: Request) {
       admin(member);
       if (typeof body.active !== 'boolean') throw new HttpError('État non valide.');
       if (body.id === member.id) throw new HttpError('Vous ne pouvez pas désactiver votre propre accès.');
-      await db.prepare("UPDATE members SET active=? WHERE id=? AND role='partner'").bind(Number(body.active), text(body.id, 'Le partenaire')).run();
+      await db.prepare("UPDATE members SET active=? WHERE id=? AND role='partner'").bind(Number(body.active), text(body.id, 'Le prestataire')).run();
       if (!body.active) sqlite().prepare('DELETE FROM sessions WHERE member_id=?').run(body.id);
     } else if (body.action === 'restoreEntryRange') {
       const id = text(body.id, 'L’identifiant', 60);

@@ -5,7 +5,7 @@ import type { Entry } from './types';
 export function partnerStatement(rows: Entry[], partnerName: string): unknown[][] {
   const decimal = (value: number) => value.toFixed(2).replace('.', ',');
   let real = 0, rounded = 0, trips = 0, fees = 0, missingFees = 0, unknownModes = 0;
-  const table: unknown[][] = [['Partenaire', 'Client', 'Date', 'Début', 'Fin', 'Ticket', 'Description', 'Mode de prestation', 'Minutes réelles', 'Minutes arrondies (quart d’heure)', 'Heures arrondies (quart d’heure)', 'Déplacements', 'Forfait prestataire EUR', 'À vérifier']];
+  const table: unknown[][] = [['Prestataire', 'Client', 'Date', 'Début', 'Fin', 'Ticket', 'Description', 'Mode de prestation', 'Minutes réelles', 'Minutes arrondies (quart d’heure)', 'Heures arrondies (quart d’heure)', 'Déplacements', 'Forfait prestataire EUR', 'À vérifier']];
   for (const row of [...rows].sort((a, b) => a.date.localeCompare(b.date) || a.start - b.start || a.client.localeCompare(b.client) || a.id.localeCompare(b.id))) {
     const minutes = billedMinutes(row.start, row.end);
     const missing = row.travel_counted === 1 && row.travel_cents === null;

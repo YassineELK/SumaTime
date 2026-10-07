@@ -131,7 +131,7 @@ assert.equal(billedState.entries.filter(e=>e.member_id===bobMemberId).reduce((n,
 const clientCsv = await call(admin,null,`/api/time?from=${date}&to=${date}&client=${client_id}&export=client`);
 assert.equal(clientCsv.replace(/^\uFEFF/,'').split('\r\n')[0], '"Date";"Début";"Fin";"Mode de prestation"');
 assert.ok(clientCsv.includes('"Sur site"'));assert.ok(clientCsv.includes('"À distance"'));
-assert.ok(!/Alice|Bob|recette|FORMULA|SITE-A|Description|Partenaire|Forfait|Tarif/.test(clientCsv));
+assert.ok(!/Alice|Bob|recette|FORMULA|SITE-A|Description|Partenaire|Prestataire|Forfait|Tarif/.test(clientCsv));
 assert.ok(!clientCsv.includes(aliceId));
 assert.ok(clientCsv.split('\r\n').every(line=>line.split(';').length===4));checks+=6;
 const ownClientCsv=await call(alice,null,`/api/time?from=${date}&to=${date}&client=${client_id}&export=client`);

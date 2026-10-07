@@ -13,7 +13,8 @@ const button=text=>[...document.querySelectorAll('button')].find(b=>b.textConten
 test('role change needs an explicit confirmation; self role is hidden and disabled member cannot be promoted',async()=>{
  const payloads=[];let reloads=0;globalThis.fetch=async(url,options)=>{if(options?.body)payloads.push(JSON.parse(options.body));return{ok:true,json:async()=>({entra:'ready'})};};
  const root=createRoot(document.getElementById('root'));await act(async()=>{root.render(React.createElement(TeamPanel,{data,reload:()=>reloads++,toggle:()=>{}}));await wait();});
- const rows=[...document.querySelectorAll('.team-member')];assert.equal(rows[0].textContent.includes('Passer en partenaire'),false);assert.ok(rows[3].querySelector('.team-actions button').disabled);
+ assert.equal(document.body.textContent.includes('Partenaire'),false);assert.equal(document.body.textContent.includes('partenaire'),false);assert.match(document.body.textContent,/Prestataire/);
+ const rows=[...document.querySelectorAll('.team-member')];assert.equal(rows[0].textContent.includes('Passer en prestataire'),false);assert.ok(rows[3].querySelector('.team-actions button').disabled);
  await act(async()=>{button('Rendre administrateur').click();await wait();});assert.deepEqual(payloads,[]);
  let form=document.querySelector('form[aria-label="Modifier le rôle de alice"]');assert.match(form.textContent,/modifier et exporter toutes les prestations/);assert.match(form.textContent,/sessions SumaTime seront déconnectées/);
  await act(async()=>{[...form.querySelectorAll('button')].find(b=>b.textContent==='Annuler').click();await wait();});assert.equal(document.querySelector('form[aria-label="Modifier le rôle de alice"]'),null);assert.deepEqual(payloads,[]);
@@ -23,6 +24,6 @@ test('role change needs an explicit confirmation; self role is hidden and disabl
 test('failed demotion leaves confirmation open and explains the server refusal',async()=>{
  globalThis.fetch=async(url,options)=>({ok:!options?.body,json:async()=>options?.body?{error:'Conservez un administrateur local de secours.'}:{entra:'ready'}});
  const root=createRoot(document.getElementById('root'));await act(async()=>{root.render(React.createElement(TeamPanel,{data,reload:()=>assert.fail('unexpected reload'),toggle:()=>{}}));await wait();});
- await act(async()=>{button('Passer en partenaire').click();await wait();});const form=document.querySelector('form[aria-label="Modifier le rôle de other"]');assert.match(form.textContent,/uniquement ses propres prestations/);
+ await act(async()=>{button('Passer en prestataire').click();await wait();});const form=document.querySelector('form[aria-label="Modifier le rôle de other"]');assert.match(form.textContent,/uniquement ses propres prestations/);
  await act(async()=>{form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await wait();});assert.match(document.querySelector('[role=alert]').textContent,/secours/);assert.ok(document.querySelector('form[aria-label="Modifier le rôle de other"]'));await act(async()=>root.unmount());
 });

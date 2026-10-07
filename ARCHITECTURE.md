@@ -4,7 +4,7 @@ Version 3 · 16 septembre 2026 · Windows Server, comptes locaux et AD / LDAP
 
 ## 1. Objectif métier
 
-Enregistrer les prestations de l’administrateur et de ses partenaires depuis un PC ou un téléphone, puis obtenir un relevé fiable pour préparer la facturation. La saisie doit rester courte : client, référence du ticket, date, heure de début et heure de fin. Une description facultative permet de justifier l’intervention.
+Enregistrer les prestations de l’administrateur et de ses prestataires depuis un PC ou un téléphone, puis obtenir un relevé fiable pour préparer la facturation. La saisie doit rester courte : client, référence du ticket, date, heure de début et heure de fin. Une description facultative permet de justifier l’intervention.
 
 Décisions confirmées : droits distincts ; l’administrateur voit toutes les prestations ; arrondi au quart d’heure supérieur. L’arrondi s’applique **à chaque prestation**, avant agrégation. Exemple : 09:00–09:16 représente 16 minutes réelles et 30 minutes facturables. Les heures originales sont conservées.
 
@@ -14,20 +14,20 @@ L’écran d’accueil est un espace de travail : saisie immédiatement accessib
 
 Sur PC, formulaire et relevé sont visibles côte à côte ; sur téléphone, ils s’empilent, la navigation reste accessible et les lignes deviennent des cartes. Les boutons ont une cible tactile suffisante, les champs ont un libellé, la navigation clavier reste possible. Aucune information essentielle ne dépend uniquement d’une couleur.
 
-Le démarrage se fait dans une base vide. L’administrateur crée ses clients et autorise ses partenaires par adresse e-mail. Aucun exemple fictif n’est mélangé aux prestations réelles.
+Le démarrage se fait dans une base vide. L’administrateur crée ses clients et autorise ses prestataires par adresse e-mail. Aucun exemple fictif n’est mélangé aux prestations réelles.
 
 ## 3. Droits et identité
 
-| Action | Partenaire | Administrateur |
+| Action | Prestataire | Administrateur |
 |---|---|---|
 | Consulter les clients actifs | Oui | Oui |
 | Créer une prestation | Pour soi | Pour soi |
 | Consulter / exporter les prestations | Les siennes | Toutes |
 | Corriger / supprimer une prestation non facturée | Les siennes | Toutes |
 | Marquer facturé / rouvrir | Non | Oui |
-| Gérer les clients et partenaires | Non | Oui |
+| Gérer les clients et prestataires | Non | Oui |
 
-Authentification locale par e-mail et mot de passe, ou AD / LDAP activable sur le serveur. Aucun compte ChatGPT requis. Le premier administrateur est créé avec un code aléatoire conservé sur le serveur. Aucune inscription publique ; l’administrateur crée les partenaires. Le mot de passe provisoire d’un partenaire local doit être changé avant l’accès aux données.
+Authentification locale par e-mail et mot de passe, ou AD / LDAP activable sur le serveur. Aucun compte ChatGPT requis. Le premier administrateur est créé avec un code aléatoire conservé sur le serveur. Aucune inscription publique ; l’administrateur crée les prestataires. Le mot de passe provisoire d’un prestataire local doit être changé avant l’accès aux données.
 
 Les mots de passe locaux sont hachés avec scrypt et sel aléatoire. Sessions opaques de 12 heures, jetons hachés en base, cookie HttpOnly / SameSite=Lax / Secure en HTTPS. Déconnexion, réinitialisation et désactivation révoquent les sessions. Limitation persistante des tentatives par identifiant et globale. Les en-têtes d’identité de l’ancienne plateforme ne sont plus acceptés.
 
@@ -42,12 +42,12 @@ Le connecteur annuaire effectue un bind de service, une recherche d’un utilisa
 - Durée réelle = fin − début ; durée facturable = plafond(durée / 15) × 15.
 - Chevauchement des prestations d’une même personne refusé, y compris lors d’une modification ; contrôlé dans l’écriture SQL pour éviter les courses concurrentes.
 - Une prestation facturée est verrouillée. L’administrateur peut la rouvrir explicitement. Exporter ne marque pas automatiquement facturé.
-- Les clients se désactivent sans effacer leur historique. Les partenaires se désactivent sans effacer leurs prestations. L’administrateur initial ne peut pas se retirer son accès.
+- Les clients se désactivent sans effacer leur historique. Les prestataires se désactivent sans effacer leurs prestations. L’administrateur initial ne peut pas se retirer son accès.
 - Chaque modification utilise une version pour refuser l’écrasement d’une modification concurrente.
 
 ## 5. Exports pour la facturation
 
-CSV UTF-8 avec BOM, séparateur point-virgule, décimales françaises, compatible avec une ouverture dans Excel. Export détaillé : identifiant de prestation, client, ticket, partenaire, date, début, fin, description, minutes réelles, minutes facturables, heures facturables et état de facturation. Export récapitulatif : total par client et partenaire. Les deux respectent la période et les filtres affichés, ainsi que les droits côté serveur.
+CSV UTF-8 avec BOM, séparateur point-virgule, décimales françaises, compatible avec une ouverture dans Excel. Export détaillé : identifiant de prestation, client, ticket, prestataire, date, début, fin, description, minutes réelles, minutes facturables, heures facturables et état de facturation. Export récapitulatif : total par client et prestataire. Les deux respectent la période et les filtres affichés, ainsi que les droits côté serveur.
 
 Protection des cellules contre l’interprétation comme formules. Les totaux additionnent les minutes facturables de chaque ligne. Il s’agit d’un relevé de préparation : tarifs horaires et forfaits en euros configurables, sans calcul de TVA, de génération de facture légale ou d’intégration comptable dans cette version.
 
@@ -81,7 +81,7 @@ Le code, les migrations et le guide sont livrés avec le produit. La persistance
 1. Une prestation de 16 minutes affiche et exporte 30 minutes facturables ; 15 minutes restent 15.
 2. Une fin antérieure, un champ obligatoire manquant, une date future et un chevauchement sont refusés.
 3. Une prestation enregistrée existe après rechargement.
-4. Le partenaire ne lit ni ne modifie les prestations d’un autre membre, même en appelant directement l’API.
+4. Le prestataire ne lit ni ne modifie les prestations d’un autre membre, même en appelant directement l’API.
 5. L’administrateur filtre toutes les prestations, exporte et verrouille les lignes facturées.
 6. Les exports détaillés et récapitulatifs ont les mêmes totaux que la sélection à l’écran.
 7. Une modification concurrente est signalée plutôt qu’écrasée.
@@ -95,13 +95,13 @@ Application fonctionnelle, document d’architecture, guide de démarrage et d�
 
 La vue d’accueil devient un calendrier hebdomadaire sur PC, avec une journée sélectionnée sur téléphone. Une grille de 96 créneaux par jour permet une sélection de durée par multiples de 15 minutes. Le clic-glissé à la souris, deux appuis tactiles ou la navigation clavier ouvrent une fenêtre accessible avec client, ticket, date, horaires et description. Le relevé et ses exports restent accessibles dans Prestations.
 
-Le calendrier recharge uniquement la semaine affichée et respecte les mêmes droits côté serveur. Il affiche le calendrier personnel par défaut ; l’administrateur peut sélectionner un partenaire ou toute l’équipe. Les blocs simultanés sont disposés côte à côte. La création reste attribuée au membre connecté ; une modification conserve le propriétaire initial. Les blocs facturés sont consultables en lecture seule.
+Le calendrier recharge uniquement la semaine affichée et respecte les mêmes droits côté serveur. Il affiche le calendrier personnel par défaut ; l’administrateur peut sélectionner un prestataire ou toute l’équipe. Les blocs simultanés sont disposés côte à côte. La création reste attribuée au membre connecté ; une modification conserve le propriétaire initial. Les blocs facturés sont consultables en lecture seule.
 
 Cette évolution réutilise l’API existante : pas de nouvelle table, de migration de données ou de modification des règles de facturation. Les sélections utilisent les heures civiles de Bruxelles ; les dates sont calculées sans dépendance au fuseau de l’appareil. Les heures exactes des prestations déjà enregistrées sont conservées. Les contrôles de chevauchement et de version restent autoritaires sur le serveur.
 
 ## 12. Migration et exploitation Windows
 
-La base locale précédente est copiée avec l’API de sauvegarde SQLite, puis vérifiée par comptage et intégrité. Les identifiants de membres et prestations restent inchangés ; l’ancien fichier est conservé. Lors de la première activation, le compte local récupère le membre administrateur existant. Les anciens partenaires doivent recevoir un compte avec la même adresse pour conserver leur identité métier.
+La base locale précédente est copiée avec l’API de sauvegarde SQLite, puis vérifiée par comptage et intégrité. Les identifiants de membres et prestations restent inchangés ; l’ancien fichier est conservé. Lors de la première activation, le compte local récupère le membre administrateur existant. Les anciens prestataires doivent recevoir un compte avec la même adresse pour conserver leur identité métier.
 
 La version autonome remplace l’architecture Sites. L’ancienne publication cloud reste indépendante et n’est pas synchronisée ; exporter ses données si elle a été utilisée avant une bascule. Aucune publication de données métier ou de mots de passe n’est faite vers cette plateforme. Installation, HTTPS IIS, AD et sauvegardes : voir INSTALLATION-WINDOWS.md.
 
@@ -113,7 +113,7 @@ L’export client est construit côté serveur avec une liste blanche de quatre 
 
 ## 14. Tarifs horaires et forfaits prestataires
 
-clients porte un tarif standard et une dérogation sur site ; members porte un forfait de déplacement. Montants stockés en centimes entiers, saisie décimale validée, absence de montant distincte de zéro. L’administrateur seul configure ces valeurs. Les tarifs de clients non concernés ne sont pas exposés dans le répertoire des partenaires.
+clients porte un tarif standard et une dérogation sur site ; members porte un forfait de déplacement. Montants stockés en centimes entiers, saisie décimale validée, absence de montant distincte de zéro. L’administrateur seul configure ces valeurs. Les tarifs de clients non concernés ne sont pas exposés dans le répertoire des prestataires.
 
 Chaque prestation conserve son tarif horaire applicable. Le montant est la durée facturable multipliée par le tarif et arrondie au centime par ligne. La table travel_days, clé unique membre/client/date, conserve le forfait de la combinaison dès sa première prestation sur site. L’écriture de la prestation et du forfait journalier est transactionnelle. Les corrections ordinaires et les changements de configuration ne revalorisent pas rétroactivement les prestations.
 
@@ -121,9 +121,9 @@ Le forfait est présenté une seule fois, sur la première ligne sur site enregi
 
 Les exports détaillés et de synthèse fournissent séparément montant des prestations, nombre de déplacements et forfait prestataire. Le forfait n’est pas facturé au client automatiquement. Aucune TVA ou facture comptable n’est produite. Le fichier destiné au client reste limité aux horaires et au mode.
 
-## 15. Rapprochement des factures partenaires
+## 15. Rapprochement des factures prestataires
 
-L’export CSV `partner` exige un membre précis pour un administrateur ; un partenaire n’accède qu’à son propre relevé. La période et le filtre client sont respectés. Les recherches libres et filtres de statut sont refusés pour ne pas masquer une ligne portant le forfait journalier ; le statut existant concerne la facturation au client, pas le règlement du prestataire.
+L’export CSV `partner` exige un membre précis pour un administrateur ; un prestataire n’accède qu’à son propre relevé. La période et le filtre client sont respectés. Les recherches libres et filtres de statut sont refusés pour ne pas masquer une ligne portant le forfait journalier ; le statut existant concerne la facturation au client, pas le règlement du prestataire.
 
 Le relevé contient les données opérationnelles, le temps réel, le temps arrondi par prestation, les déplacements et leurs montants, puis une ligne de total. Il ne reprend aucun tarif de vente client. Il ne suppose pas de tarif horaire d’achat prestataire. Un forfait absent ou un mode historique inconnu est signalé, et le total monétaire des déplacements reste vide tant que ces données ne sont pas complètes. Exporter ne modifie ni les prestations ni leur statut. Aucun changement de schéma n’est nécessaire.
 
@@ -133,11 +133,11 @@ L’application reprend la police Poppins, les logos originaux et la palette du 
 
 ## 17. Couleur par client
 
-Migration additive `0004_client_color.sql` : couleur nullable sur `clients`, au format strict `#RRGGBB`, normalisée en majuscules par l’API. Seul un administrateur peut modifier ce réglage partagé ; les partenaires reçoivent la couleur en lecture avec le répertoire clients. Valeur nulle = styles Sumatoni par défaut. Le calendrier utilise la couleur actuelle du client pour les anciennes et nouvelles prestations, sans modifier les enregistrements de temps. L’application affiche un fond teinté clair, une bordure colorée et un texte foncé ; la facturation reste identifiée par un cadenas. Aucun changement dans les exports.
+Migration additive `0004_client_color.sql` : couleur nullable sur `clients`, au format strict `#RRGGBB`, normalisée en majuscules par l’API. Seul un administrateur peut modifier ce réglage partagé ; les prestataires reçoivent la couleur en lecture avec le répertoire clients. Valeur nulle = styles Sumatoni par défaut. Le calendrier utilise la couleur actuelle du client pour les anciennes et nouvelles prestations, sans modifier les enregistrements de temps. L’application affiche un fond teinté clair, une bordure colorée et un texte foncé ; la facturation reste identifiée par un cadenas. Aucun changement dans les exports.
 
 ## 17. Espace prestataire et intégration GLPI
 
-La version 0.2 ajoute les parcours documentés dans [Évolution prestataire](docs/EVOLUTION-V0.2.0.md). L’accueil est personnel même pour l’administrateur ; les données de vente ne sont pas exposées aux partenaires par l’API workday.
+La version 0.2 ajoute les parcours documentés dans [Évolution prestataire](docs/EVOLUTION-V0.2.0.md). L’accueil est personnel même pour l’administrateur ; les données de vente ne sont pas exposées aux prestataires par l’API workday.
 
 La migration 0005 ajoute work_timers (un chronomètre par membre), timer_receipts (rejeu idempotent après enregistrement), glpi_credentials (jeton personnel chiffré) et clients.glpi_entity_id (association unique nullable). Les migrations sont exécutées au démarrage par db/raw.ts ; les schémas Drizzle historiques ne pilotent pas le déploiement. Ne pas utiliser db:generate pour appliquer ces migrations opérationnelles.
 

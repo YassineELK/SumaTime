@@ -4,7 +4,7 @@ Version **0.4.2 déployée en production le 7 octobre 2026**, avec contrôle Gra
 
 ## Fonctionnement pour l’administrateur et le prestataire
 
-Dans **Entra → Applications d’entreprise → SumaTime → Utilisateurs et groupes**, ajouter individuellement une personne avec **Accès par défaut**, comme Kiosk actuellement. À sa première connexion Microsoft, SumaTime vérifie le jeton signé puis lit dans Graph l’attribution de cet Object ID à l’application SumaTime. Une attribution confirmée autorise la création d’un compte **partenaire**, sans mot de passe SumaTime et sans ID utilisateur à saisir.
+Dans **Entra → Applications d’entreprise → SumaTime → Utilisateurs et groupes**, ajouter individuellement une personne avec **Accès par défaut**, comme Kiosk actuellement. À sa première connexion Microsoft, SumaTime vérifie le jeton signé puis lit dans Graph l’attribution de cet Object ID à l’application SumaTime. Une attribution confirmée autorise la création d’un compte **prestataire**, sans mot de passe SumaTime et sans ID utilisateur à saisir.
 
 Le Tenant ID et l’Object ID constituent l’identité stable ; email ou UPN servent seulement au contact. Une adresse déjà utilisée nécessite un rattachement manuel pour éviter une reprise de compte. Les administrateurs SumaTime existants conservent leurs droits. Aucun nouveau compte administrateur n’est créé automatiquement.
 
@@ -41,9 +41,9 @@ Le mode par défaut reste `ENTRA_ACCESS_MODE=manual` et `ENTRA_AUTO_PROVISION=fa
 - Un administrateur général Entra doit aussi être attribué pour accéder en mode `assignment` : la vérification explicite Graph ne reprend pas l’exception d’accès de Microsoft pour les administrateurs généraux.
 - Si Graph est indisponible, refuse la permission, répond de façon incomplète, ou si Affectation requise n’est plus Oui : aucune nouvelle création. Après expiration du cache, les API protégées répondent **503**, sans autoriser l’action ni supprimer la session pour une panne temporaire. L’application conserve les formulaires et présente Réessayer ; les accès locaux de secours restent utilisables.
 - Pagination complète avant décision. Origine HTTPS fixe, aucun redirect suivi ni jeton envoyé à une URL arbitraire. Requêtes bornées, limite de taille, de pages et de durée. Jetons Graph uniquement en mémoire, pas dans SQLite, le navigateur, les exports ou les logs.
-- Création transactionnelle unique, même avec deux premières connexions simultanées. Nom/email changés dans Microsoft ne réécrivent pas le profil existant et aucun claim Admin ne promeut le nouveau partenaire.
+- Création transactionnelle unique, même avec deux premières connexions simultanées. Nom/email changés dans Microsoft ne réécrivent pas le profil existant et aucun claim Admin ne promeut le nouveau prestataire.
 - Désactivation ou retrait local du rattachement bloquent l’accès et la recréation involontaire ; une réactivation/réassociation explicite conserve l’identité initiale.
-- `ENTRA_AUTO_PROVISION=false` bloque les nouveaux comptes mais laisse les partenaires déjà créés accéder **sous contrôle Graph**, tant que le mode assignment reste actif. Revenir au mode manual ne permet pas aux comptes automatiquement créés de contourner ce contrôle. Les rattachements manuels antérieurs et les comptes locaux/LDAP gardent leur comportement manuel.
+- `ENTRA_AUTO_PROVISION=false` bloque les nouveaux comptes mais laisse les prestataires déjà créés accéder **sous contrôle Graph**, tant que le mode assignment reste actif. Revenir au mode manual ne permet pas aux comptes automatiquement créés de contourner ce contrôle. Les rattachements manuels antérieurs et les comptes locaux/LDAP gardent leur comportement manuel.
 
 La migration `0009_entra_provision.sql` reste additive. Aucun remplacement de base de production par une base de développement. Les comptes automatiques ne reçoivent pas de mot de passe local ; un éventuel accès local distinct reste géré explicitement par l’administrateur.
 
@@ -65,4 +65,4 @@ Si des comptes ont été créés automatiquement, désactiver Microsoft avant de
 
 ## Donner des droits administrateur
 
-À partir de la v0.4.3, après création du compte partenaire, un administrateur peut ouvrir **Équipe → Rendre administrateur** puis confirmer. Les sessions du membre sont déconnectées ; à sa reconnexion, le rôle choisi est conservé. Voir [la procédure](GESTION-DES-ROLES.md). Aucun rôle Entra personnalisé requis. La première connexion Kiosk et sa création automatique ont été validées par le propriétaire le 7 octobre 2026.
+À partir de la v0.4.3, après création du compte prestataire, un administrateur peut ouvrir **Équipe → Rendre administrateur** puis confirmer. Les sessions du membre sont déconnectées ; à sa reconnexion, le rôle choisi est conservé. Voir [la procédure](GESTION-DES-ROLES.md). Aucun rôle Entra personnalisé requis. La première connexion Kiosk et sa création automatique ont été validées par le propriétaire le 7 octobre 2026.
