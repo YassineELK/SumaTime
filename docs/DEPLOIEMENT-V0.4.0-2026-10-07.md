@@ -22,7 +22,7 @@ Après bascule : 2 558 fichiers runtime vérifiés au manifeste ; 37 assets serv
 
 ## État du pilote Microsoft
 
-Tenant et Client ID fournis par le propriétaire configurés ; découverte OIDC du tenant validée sur TLS. L’Object ID fourni est rattaché explicitement au seul administrateur local existant. Le rôle, le mot de passe et l’historique sont conservés.
+Tenant et Client ID fournis par le propriétaire configurés ; découverte OIDC du tenant validée sur TLS. Le pilote est rattaché explicitement au seul administrateur local existant. Le premier Object ID fourni était celui de l’inscription d’application : après un retour Microsoft refusé par SumaTime, le propriétaire a confirmé l’Object ID de son utilisateur. Le rattachement a été corrigé après sauvegarde, avec événements de retrait/ajout ; aucune modification des tables métier, du compte local ou de ses sessions. Les quatorze prestations sont conservées. La nouvelle connexion interactive reste à vérifier.
 
 Le secret a ensuite été saisi par le propriétaire sur le serveur, puis **Microsoft a été activé pour le pilote**. Le redémarrage a conservé toutes les données, y compris le compte local. Les vérifications HTTPS du vrai démarrage OIDC passent : tenant, client, URI de retour, PKCE S256, cookie Secure/HttpOnly/SameSite et choix de compte. Un flux de contrôle a été annulé et consommé correctement. La connexion Microsoft interactive reste à effectuer par le propriétaire ; le secret ne peut être validé réellement qu’au retour de cette connexion.
 
