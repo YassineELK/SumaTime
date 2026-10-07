@@ -1,4 +1,4 @@
-# SumaTime 0.4.1 — provisionnement automatique prêt pour revue
+# SumaTime 0.4.1 — approche par rôle refusée, non déployée
 
 Le propriétaire souhaite que les personnes autorisées dans Entra disposent automatiquement d’un compte SumaTime. La fonctionnalité est développée sur CT-ANT, branche `codex/entra-login`, commit `0d5c30d6b9824627c1f4620075e2c7ff80bd82a7`.
 
@@ -20,8 +20,16 @@ Le réglage Microsoft se fait dans **Inscriptions d’applications → SumaTime 
 
 ## État
 
-**Pas de bascule ni d’activation automatique en production.** Le contrôle d’approbation automatique a refusé l’activation : l’autorisation explicite pour l’extension d’accès et son périmètre doit être confirmée par le propriétaire. Une demande précisant la création uniquement de partenaires avec le rôle `SumaTime.Partner` a été présentée. La production reste v0.4.0, avec un membre et quatorze prestations lors du contrôle, accès Microsoft et local existants conservés. L’inscription du rôle Microsoft est aussi en cours côté propriétaire.
+**Pas de bascule ni d’activation automatique en production.** Le contrôle d’approbation automatique a refusé l’activation faute d’autorisation explicite pour l’extension d’accès. Le propriétaire a ensuite explicitement refusé cette approche : solution jugée insuffisamment mature et blocage sur les rôles personnalisés avec sa licence actuelle. Ce refus remplace la demande d’accord en attente. Ne pas activer la release ni le provisionnement par rôle sans nouvelle autorisation explicite. Le code et la release inactive sont conservés comme travail de développement.
 
-Après accord : sauvegarde fraîche avant bascule, migration additive, comparaison des données et contrôle HTTPS, puis activation du provisionnement pour le rôle signé. Le compte Kiosk devra recevoir ce rôle et se reconnecter ; aucun ID manuel à saisir dans SumaTime.
+Le contrôle en lecture seule après ce refus confirme : production v0.4.0, Microsoft activé, provisionnement automatique désactivé, un membre, quatorze prestations, table de provisionnement absente. Aucun compte Kiosk créé.
+
+## Piste à étudier, sans activation
+
+Partir des attributions individuelles existantes avec « Accès par défaut », plutôt que demander au propriétaire de créer un rôle. Dans l’application d’entreprise, vérifier « Affectation requise ? = Oui » et le consentement administrateur requis avant tout essai. Microsoft confirme que l’accès par défaut satisfait l’exigence d’attribution lorsqu’aucun rôle nommé n’est exposé ; cette affectation ne fournit pas de claim `roles`. Ne pas remplacer le contrôle du rôle signé par une simple vérification du tenant ou du domaine email : cela pourrait élargir l’accès.
+
+La restriction d’attribution ne s’applique pas aux administrateurs généraux Microsoft. Un modèle reposant uniquement sur cette restriction comporte donc cette exception. Tester avec un utilisateur ordinaire attribué et un autre non attribué ; définir explicitement le traitement de cette exception avant toute création automatique. Aucun mécanisme alternatif n’est développé ou activé à ce stade. L’approche reste à valider et à faire autoriser avant une mise en production.
+
+Références officielles : [accès par défaut et absence de claim roles](https://learn.microsoft.com/en-us/troubleshoot/entra/entra-id/app-integration/error-code-aadsts50105-user-not-assigned-role), [attribution individuelle et licence pour les groupes](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/what-is-access-management), [affectation requise et exception administrateur général](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/application-properties).
 
 Retour au code v0.4.0 : désactiver Microsoft avant retour si des utilisateurs ont été provisionnés, car l’ancien code ne contrôle pas leur rôle applicatif. Garder la base courante et utiliser l’administrateur local de secours. Ne pas restaurer une ancienne base au détriment de nouvelles prestations.
