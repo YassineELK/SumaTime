@@ -37,6 +37,20 @@ export async function mockMicrosoft(port = 8791) {
       const claims = { iss: issuer, aud: clientId, sub: 'not-used-as-member', tid: tenant, oid: aliceOid,
         iat: now, exp: now + 3600, nonce: record.params.get('nonce'), email: 'changed-name@elsewhere.test', name: 'Untrusted display name' };
       const mode = record.mode;
+      if (mode.startsWith('auto')) {
+        claims.oid = '88888888-8888-4888-8888-888888888888';
+        claims.email = 'kiosk@entra.test'; claims.name = 'Kiosk'; claims.roles = ['SumaTime.Partner'];
+      }
+      if (mode === 'auto-no-role') delete claims.roles;
+      if (mode === 'auto-wrong-role') claims.roles = ['SumaTime.Admin', 'sumatime.partner'];
+      if (mode === 'auto-malformed-role') claims.roles = 'SumaTime.Partner';
+      if (mode === 'auto-extra-admin') claims.roles.push('SumaTime.Admin');
+      if (mode === 'auto-no-email') delete claims.email;
+      if (mode === 'auto-collision') { claims.oid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'; claims.email = 'ADMIN@entra.test'; }
+      if (mode === 'auto-upn') { claims.oid = '99999999-9999-4999-8999-999999999999'; delete claims.email; claims.preferred_username = 'unlicensed@entra.test'; claims.name = 'Sans licence'; }
+      if (mode === 'auto-updated') { claims.email = 'updated-contact@entra.test'; claims.name = 'Changed display'; }
+      if (mode === 'auto-tenant') claims.tid = '66666666-6666-4666-8666-666666666666';
+      if (mode === 'auto-expired') claims.exp = now - 3600;
       if (mode === 'bob') claims.oid = bobOid;
       if (mode === 'unknown') { claims.oid = '55555555-5555-4555-8555-555555555555'; claims.email = 'alice@entra.test'; }
       if (mode === 'tenant') claims.tid = '66666666-6666-4666-8666-666666666666';
@@ -47,7 +61,7 @@ export async function mockMicrosoft(port = 8791) {
       if (mode === 'missing-oid') delete claims.oid;
       const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'test-key' })).toString('base64url');
       const payload = Buffer.from(JSON.stringify(claims)).toString('base64url'), input = header + '.' + payload;
-      const idToken = input + '.' + sign('RSA-SHA256', Buffer.from(input), mode === 'signature' ? wrong.privateKey : key.privateKey).toString('base64url');
+      const idToken = input + '.' + sign('RSA-SHA256', Buffer.from(input), ['signature','auto-signature'].includes(mode) ? wrong.privateKey : key.privateKey).toString('base64url');
       return json({ access_token: 'never-store-this-token', token_type: 'Bearer', expires_in: 3600, ...(mode !== 'missing-id-token' ? { id_token: idToken } : {}) });
     }
     json({ error: 'not_found' }, 404);

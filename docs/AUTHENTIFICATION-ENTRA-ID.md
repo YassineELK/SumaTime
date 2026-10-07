@@ -2,6 +2,10 @@
 
 Version **0.4.0**, déployée sur la production le 7 octobre 2026 à la demande du propriétaire. Le pilote Microsoft utilise désormais l’adresse HTTPS de production ; le secret est installé, Microsoft est activé et la connexion interactive réelle reste à vérifier. Les données et comptes locaux sont conservés. Aucun changement du SSO GLPI. Voir [le compte rendu de déploiement](DEPLOIEMENT-V0.4.0-2026-10-07.md).
 
+## Création automatique des partenaires
+
+Depuis la version 0.4.1, le rôle applicatif Microsoft `SumaTime.Partner` permet de créer un nouveau partenaire à sa première connexion avec `ENTRA_AUTO_PROVISION=true`. Les comptes et rattachements explicites existants sont conservés. Voir [le guide de provisionnement](PROVISIONNEMENT-ENTRA.md). Une attribution « Accès par défaut » ne crée pas le compte.
+
 ## Comportement livré
 
 Quand les paramètres serveur sont complets et `ENTRA_ENABLED=true`, la page de connexion propose **Se connecter avec Microsoft**. La session Microsoft du navigateur peut être réutilisée ; MFA et accès conditionnel restent décidés par le tenant. **Choisir un autre compte Microsoft** permet de sortir d’une session Microsoft qui ne correspond pas au compte Sumatoni attendu.

@@ -17,7 +17,7 @@ const baseline={};for(const table of ['members','accounts','sessions','clients',
 const {sqlite}=await import('../db/raw.ts');const db=sqlite();
 test('Entra migration is additive and preserves existing identities, sessions and billing data',()=>{
  for(const [table,rows]of Object.entries(baseline))assert.deepEqual(db.prepare(`SELECT * FROM ${table}`).all(),rows,table);
- db.exec(readFileSync(resolve('drizzle/0008_entra_auth.sql'),'utf8'));assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');assert.equal(db.prepare('PRAGMA foreign_key_check').all().length,0);
+ db.exec(readFileSync(resolve('drizzle/0008_entra_auth.sql'),'utf8'));db.exec(readFileSync(resolve('drizzle/0009_entra_provision.sql'),'utf8'));db.exec(readFileSync(resolve('drizzle/0009_entra_provision.sql'),'utf8'));assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');assert.equal(db.prepare('PRAGMA foreign_key_check').all().length,0);
 });
 test('identity uniqueness and persistent session markers prevent revoked Microsoft sessions falling back to local login',()=>{
  db.prepare('INSERT INTO entra_identities VALUES (?,?,?,?,?)').run('owner','tenant','object','owner','now');

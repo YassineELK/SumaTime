@@ -1,8 +1,8 @@
 import * as oidc from 'openid-client';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { sqlite, transaction } from '@/db/raw';
 import { AuthError, tokenHash } from './auth';
-import { entraConfiguration, entraGuid } from './entra-config';
+import { entraConfiguration, entraGuid, ENTRA_PARTNER_ROLE } from './entra-config';
 export const ENTRA_FLOW_COOKIE = 'sumatoni_entra_flow';
 const FLOW_SECONDS = 600;
 type Configuration = NonNullable<ReturnType<typeof entraConfiguration>>;
@@ -57,6 +57,40 @@ export function consumeEntraFlow(url: URL, browser: string | undefined): Flow {
   if (!flow) throw new AuthError('Connexion expirée. Réessayez.', 400);
   return flow;
 }
+function resolveEntraMember(config: Configuration, objectId: string, claims: Record<string, unknown>) {
+  // Only an app role in the already signature-validated ID token authorizes
+  // provisioning. Default access, email domain and display names never do.
+  const entitled = Array.isArray(claims.roles) && claims.roles.every(role => typeof role === 'string') && claims.roles.includes(ENTRA_PARTNER_ROLE);
+  const denied = () => new AuthError('Ce compte Microsoft n’a pas accès à SumaTime. Contactez votre administrateur.', 403);
+  return transaction(db => {
+    const existing = db.prepare(`SELECT m.id,m.active,p.member_id AS provisioned
+      FROM entra_identities e JOIN members m ON m.id=e.member_id
+      LEFT JOIN entra_provisioned_members p ON p.member_id=m.id AND p.tenant_id=e.tenant_id AND p.object_id=e.object_id
+      WHERE e.tenant_id=? AND e.object_id=?`).get(config.tenantId, objectId) as { id: string; active: number; provisioned: string | null } | undefined;
+    if (existing) {
+      if (!existing.active || (existing.provisioned && !entitled)) throw denied();
+      return existing.id; // Preserve existing role, history, name and local/LDAP credentials.
+    }
+    // A deliberately unlinked auto-created identity remains revoked, including
+    // after its email has changed. Do not create a second business identity.
+    if (db.prepare('SELECT 1 FROM entra_provisioned_members WHERE tenant_id=? AND object_id=?').get(config.tenantId, objectId)) throw denied();
+    if (!config.autoProvision || !entitled) throw denied();
+    const address = [claims.email, claims.preferred_username].find(value =>
+      typeof value === 'string' && value.trim().length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim()));
+    if (typeof address !== 'string') throw denied();
+    const email = address.trim().toLowerCase();
+    // Email is contact metadata only. A collision always needs an explicit
+    // administrator link; never take over an existing account by email.
+    if (db.prepare('SELECT 1 FROM members WHERE lower(email)=?').get(email)) throw denied();
+    const name = typeof claims.name === 'string' ? claims.name.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 100) : '';
+    const id = randomUUID(), now = new Date().toISOString();
+    db.prepare("INSERT INTO members(id,email,name,role,active,created_at) VALUES (?,?,?,'partner',1,?)").run(id, email, name || email.split('@')[0], now);
+    db.prepare('INSERT INTO entra_identities VALUES (?,?,?,?,?)').run(id, config.tenantId, objectId, id, now);
+    db.prepare('INSERT INTO entra_provisioned_members VALUES (?,?,?,?)').run(id, config.tenantId, objectId, now);
+    db.prepare("INSERT INTO entra_identity_events(member_id,actor_id,action,tenant_id,object_id,created_at) VALUES (?,?,'provision',?,?,?)").run(id, id, config.tenantId, objectId, now);
+    return id;
+  });
+}
 export async function finishEntra(config: Configuration, url: URL, flow: Flow) {
   if (url.href.length > 10000) throw new AuthError('Retour Microsoft non valide.');
   const tokens = await oidc.authorizationCodeGrant(await client(config), url,
@@ -64,12 +98,10 @@ export async function finishEntra(config: Configuration, url: URL, flow: Flow) {
   const claims = tokens.claims();
   if (!claims || claims.iss !== config.issuer || entraGuid(claims.tid) !== config.tenantId) throw new AuthError('Compte Microsoft non autorisé.', 403);
   const objectId = entraGuid(claims.oid);
-  const member = sqlite().prepare(`SELECT m.id FROM entra_identities e JOIN members m ON m.id=e.member_id
-    WHERE e.tenant_id=? AND e.object_id=? AND m.active=1`).get(config.tenantId, objectId) as { id: string } | undefined;
-  if (!member) throw new AuthError('Ce compte Microsoft n’a pas accès à SumaTime. Contactez votre administrateur.', 403);
-  // Email/name are display claims, never a permission or an automatic account link.
-  return { memberId: member.id, tenantId: config.tenantId, objectId,
-    maxAge: Math.min(config.sessionSeconds, Math.floor(claims.exp - Date.now() / 1000)) };
+  const maxAge = Math.min(config.sessionSeconds, Math.floor(claims.exp - Date.now() / 1000));
+  if (maxAge <= 0) throw new AuthError('Session expirée. Reconnectez-vous.', 401);
+  const memberId = resolveEntraMember(config, objectId, claims);
+  return { memberId, tenantId: config.tenantId, objectId, maxAge };
 }
 export function linkEntraIdentity(memberId: string, tenant: unknown, object: unknown, actorId: string) {
   let tenantId: string, objectId: string;

@@ -11,7 +11,7 @@ const directory = mkdtempSync(resolve(runtimeRoot, 'entra-qa-'));
 const mock = await mockMicrosoft();
 const env = { ...process.env, DATABASE_PATH: resolve(directory, 'qa.sqlite'), SETUP_TOKEN: randomBytes(32).toString('hex'),
   APP_URL: 'http://127.0.0.1:8788', TEST_URL: 'http://127.0.0.1:8788', LDAP_ENABLED: 'false',
-  ENTRA_ENABLED: 'true', ENTRA_TENANT_ID: tenant, ENTRA_CLIENT_ID: clientId, ENTRA_CLIENT_SECRET: 'test-only-secret', ENTRA_SESSION_MINUTES: '60',
+  ENTRA_ENABLED: 'true', ENTRA_AUTO_PROVISION: 'false', ENTRA_TENANT_ID: tenant, ENTRA_CLIENT_ID: clientId, ENTRA_CLIENT_SECRET: 'test-only-secret', ENTRA_SESSION_MINUTES: '60',
   TEST_MOCK_MICROSOFT: 'http://127.0.0.1:8791', NEXT_TELEMETRY_DISABLED: '1',
   NODE_OPTIONS: `--import=${resolve('tests/entra-fetch-shim.mjs')}` };
 let child = spawn(process.execPath, ['.next/standalone/server.js'], { env: { ...env, HOSTNAME: '127.0.0.1', PORT: '8788' }, stdio: ['ignore','pipe','pipe'] });
@@ -32,6 +32,14 @@ try {
   assert.ok(!logs.includes('test-only-secret') && !logs.includes('never-store-this-token'), 'No credential/token in server logs');
   console.log('Microsoft simulator: PKCE, client authentication and JWKS verified; no provider tokens in logs.');
   const exited = new Promise(r => child.once('exit', r)); child.kill(); await exited;
+  child = spawn(process.execPath, ['.next/standalone/server.js'], { env: { ...env, ENTRA_AUTO_PROVISION: 'true', HOSTNAME: '127.0.0.1', PORT: '8788' }, stdio: ['ignore','pipe','pipe'] });
+  child.stdout.on('data', x => logs += x); child.stderr.on('data', x => logs += x);
+  let provisionReady = false;
+  for (let i = 0; i < 120; i++) { if (child.exitCode !== null) throw new Error(logs); try { if ((await fetch(env.TEST_URL + '/api/auth')).ok) { provisionReady = true; break; } } catch {} await new Promise(r => setTimeout(r, 300)); }
+  assert.ok(provisionReady, 'Provisioning QA server ready');
+  const provisionTest = spawn(process.execPath, ['tests/entra-provision-recette.mjs'], { env: { ...env, NODE_OPTIONS: '' }, stdio: 'inherit' });
+  assert.equal(await new Promise(r => provisionTest.once('exit', r)), 0, logs);
+  const provisionStopped = new Promise(r => child.once('exit', r)); child.kill(); await provisionStopped;
   const db = new DatabaseSync(env.DATABASE_PATH), token = randomBytes(32).toString('hex');
   const alice = db.prepare('SELECT id FROM members WHERE email=?').get('alice@entra.test').id;
   const owner = db.prepare('SELECT id FROM members WHERE role=?').get('admin').id;

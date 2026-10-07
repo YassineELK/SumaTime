@@ -61,7 +61,7 @@ equal((await callback(otherRedirect)).location,'/login?entra_error=invalid');
 equal((await callback(otherRedirect,flow.cookie)).location,'/login?entra_error=invalid');
 equal((await callback(otherRedirect,otherFlow.cookie)).location,base+'/','wrong browser must not consume the legitimate flow');
 const badStateFlow=await start(), badStateRedirect=new URL(await authorize(badStateFlow));badStateRedirect.searchParams.set('state','a'.repeat(43));equal((await callback(badStateRedirect,badStateFlow.cookie)).location,'/login?entra_error=invalid');
-for(const mode of ['tenant','issuer','audience','nonce','expired','signature','missing-oid','missing-id-token','offline','unknown','cancelled']){
+for(const mode of ['tenant','issuer','audience','nonce','expired','signature','missing-oid','missing-id-token','offline','unknown','auto','cancelled']){
  const f=await start(), r=await callback(await authorize(f,mode),f.cookie);assert.ok(r.location.startsWith('/login?entra_error='),mode+' must be rejected');checks++;equal(r.cookie,undefined,mode+' must not create a session');
 }
 const db=new DatabaseSync(process.env.DATABASE_PATH);
