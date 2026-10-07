@@ -100,7 +100,9 @@ export default function Workspace() {
     const call = ++sequence.current;
     setLoading(true);
     try {
-      const auth = await fetch('/api/auth', { cache: 'no-store' }).then(r => r.json()) as Pick<State, 'me'>;
+      const authResponse = await fetch('/api/auth', { cache: 'no-store' });
+      const auth = await authResponse.json() as Pick<State, 'me'> & { error?: string };
+      if (!authResponse.ok) throw new Error(auth.error || 'Vérification de votre accès impossible. Réessayez.');
       if (!auth.me) { router.push('/login'); return; }
       if (auth.me.must_change) { setData({ me: auth.me, clients: [], members: [], entries: [] }); return; }
       const res = await fetch('/api/time?' + query(filters), { cache: 'no-store' });

@@ -34,3 +34,15 @@ test('admin can attach Microsoft to an existing member without creating a duplic
  await act(async()=>{input(form.querySelectorAll('input')[1],'33333333-3333-4333-8333-333333333333');form.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await wait();});
  assert.deepEqual(payloads,[{action:'entraLink',id:'alice-stable',tenantId:'11111111-1111-4111-8111-111111111111',objectId:'33333333-3333-4333-8333-333333333333'}]);assert.equal(reloads,1);await act(async()=>{root.unmount();});
 });
+
+test('temporary access-verification failure explains retry and leaves the local login available',async()=>{
+ dom.reconfigure({url:'http://localhost:5173/login'});
+ globalThis.fetch=async()=>({status:503,ok:false,json:async()=>({setup:false,ldap:false,entra:'ready',error:'La vérification de votre accès Microsoft est temporairement indisponible. Réessayez.'})});
+ const root=createRoot(document.getElementById('root'));
+ await act(async()=>{root.render(React.createElement(Login));await wait();});
+ assert.match(document.querySelector('[role=alert]').textContent,/temporairement indisponible/);
+ assert.ok(document.querySelector('input[autocomplete=username]'));
+ assert.ok(document.querySelector('input[type=password]'));
+ assert.ok(document.querySelector('a[href="/api/auth/entra/start"]'));
+ await act(async()=>{root.unmount();});
+});

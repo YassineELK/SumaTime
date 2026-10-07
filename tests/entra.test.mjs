@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { entraConfiguration, entraGuid, entraStatus } from '../lib/entra-config.ts';
 import { tenant, clientId } from './entra-mock.mjs';
 const original = {...process.env};
-function configure(overrides={}){Object.assign(process.env,{ENTRA_ENABLED:'true',ENTRA_TENANT_ID:tenant,ENTRA_CLIENT_ID:clientId,ENTRA_CLIENT_SECRET:'dummy-only',APP_URL:'https://dev.example.test',ENTRA_SESSION_MINUTES:'60'},overrides);}
+function configure(overrides={}){Object.assign(process.env,{ENTRA_ENABLED:'true',ENTRA_TENANT_ID:tenant,ENTRA_CLIENT_ID:clientId,ENTRA_CLIENT_SECRET:'dummy-only',APP_URL:'https://dev.example.test',ENTRA_SESSION_MINUTES:'60',ENTRA_ACCESS_MODE:'manual',ENTRA_AUTO_PROVISION:'false'},overrides);}
 test('Entra is optional and rejects insecure or ambiguous configuration',()=>{
  try{
   process.env.ENTRA_ENABLED='false';assert.equal(entraConfiguration(),null);assert.equal(entraStatus(),'disabled');
@@ -13,6 +13,9 @@ test('Entra is optional and rejects insecure or ambiguous configuration',()=>{
   configure({APP_URL:'http://localhost:5173'});assert.equal(entraStatus(),'ready');
   for(const value of ['common','organizations','consumers','../other']){configure({ENTRA_TENANT_ID:value});assert.throws(entraConfiguration);}
   for(const value of ['0','14','241','1.5','NaN']){configure({ENTRA_SESSION_MINUTES:value});assert.throws(entraConfiguration);}
+  configure({ENTRA_ACCESS_MODE:'unknown'});assert.equal(entraStatus(),'incomplete');
+  configure({ENTRA_AUTO_PROVISION:'true'});assert.equal(entraStatus(),'incomplete','Auto creation cannot fall back to manual mode');
+  configure({ENTRA_AUTO_PROVISION:'true',ENTRA_ACCESS_MODE:'assignment'});assert.equal(entraStatus(),'ready');
   configure({ENTRA_CLIENT_SECRET:''});assert.equal(entraStatus(),'incomplete');
  }finally{process.env=original;}
 });

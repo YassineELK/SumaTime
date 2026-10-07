@@ -4,7 +4,7 @@ Version **0.4.0**, déployée sur la production le 7 octobre 2026 à la demande 
 
 ## Création automatique des partenaires
 
-Depuis la version 0.4.1, le rôle applicatif Microsoft `SumaTime.Partner` permet de créer un nouveau partenaire à sa première connexion avec `ENTRA_AUTO_PROVISION=true`. Les comptes et rattachements explicites existants sont conservés. Voir [le guide de provisionnement](PROVISIONNEMENT-ENTRA.md). Une attribution « Accès par défaut » ne crée pas le compte.
+La version **0.4.2 en développement** remplace l’approche par rôle de la 0.4.1, refusée et non déployée. Le mode optionnel `ENTRA_ACCESS_MODE=assignment` contrôle directement les attributions individuelles à l’application SumaTime via Microsoft Graph, y compris « Accès par défaut ». `ENTRA_AUTO_PROVISION=true` crée seulement des partenaires après confirmation de l’attribution. Les comptes existants conservent leur identité, leurs droits et leurs prestations. Voir [le guide de provisionnement](PROVISIONNEMENT-ENTRA.md). La production 0.4.0 conserve le comportement de rattachement manuel ; aucune activation nouvelle n’a été effectuée.
 
 ## Comportement livré
 
@@ -18,10 +18,10 @@ Un membre connecté avec Microsoft ne reçoit pas de formulaire de changement de
 
 ## Architecture et protections
 
-- Client serveur confidentiel, mono-tenant, flux Authorization Code + PKCE S256, scopes `openid profile email`. Aucun appel Graph et aucun refresh token demandé.
+- Client serveur confidentiel, mono-tenant, flux Authorization Code + PKCE S256, scopes `openid profile email`. En mode manuel, aucun appel Graph. En mode attribution, les lectures Graph utilisent un jeton serveur séparé obtenu par client credentials ; aucun refresh token demandé.
 - `openid-client` **6.8.8**, signature RS256 du jeton d’identité vérifiée avec les clés JWKS, émetteur exact, audience, expiration, nonce, tenant et Object ID contrôlés.
 - `state` aléatoire et code d’autorisation liés à un cookie navigateur HttpOnly / SameSite=Lax. PKCE et nonce conservés côté serveur, dix minutes maximum, consommés une seule fois avant l’échange de code. Un retour rejoué ou provenant d’un autre navigateur est refusé.
-- Endpoints limités à HTTPS sur `login.microsoftonline.com`. Aucun paramètre de requête ne peut remplacer le tenant, l’URI de retour ou l’émetteur. Aucun contournement TLS en code applicatif.
+- Endpoints de connexion limités à HTTPS sur `login.microsoftonline.com`, lectures d’attribution limitées à `graph.microsoft.com`. Aucun paramètre de requête ne peut remplacer le tenant, l’URI de retour ou l’émetteur. Aucun contournement TLS en code applicatif.
 - Cookie de session HttpOnly, SameSite=Lax et Secure en HTTPS. Session Microsoft d’une heure par défaut, limitée aussi par l’expiration du jeton ; pas de conservation des jetons Microsoft dans SQLite ou le navigateur.
 - Migration additive `0008_entra_auth.sql`. `accounts` local/LDAP reste inchangé. Les tables `entra_identities`, `entra_sessions` et `entra_flows` isolent les nouvelles identités et sessions. `entra_identity_events` trace les rattachements et retraits avec l’administrateur qui les a effectués.
 - Rattachements réservés aux administrateurs, protégés contre CSRF et doublons. Une identité Microsoft ne peut appartenir à deux membres. Il faut retirer un ancien rattachement avant de le remplacer.

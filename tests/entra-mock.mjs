@@ -10,6 +10,9 @@ export async function mockMicrosoft(port = 8791) {
   const wrong = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const jwk = { ...key.publicKey.export({ format: 'jwk' }), kid: 'test-key', use: 'sig', alg: 'RS256' };
   const codes = new Map(), calls = [];
+  const resourceId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const graph = { assigned: new Set([aliceOid,bobOid,'88888888-8888-4888-8888-888888888888','99999999-9999-4999-8999-999999999999','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','cccccccc-cccc-4ccc-8ccc-cccccccccccc','dddddddd-dddd-4ddd-8ddd-dddddddddddd']), offline: false, required: true };
+
   const metadata = { issuer, authorization_endpoint: `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize`,
     token_endpoint: `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, jwks_uri: `https://login.microsoftonline.com/${tenant}/discovery/v2.0/keys`,
     response_types_supported: ['code'], subject_types_supported: ['public'], id_token_signing_alg_values_supported: ['RS256'], token_endpoint_auth_methods_supported: ['client_secret_post'] };
@@ -17,6 +20,20 @@ export async function mockMicrosoft(port = 8791) {
     const url = new URL(req.url, 'http://127.0.0.1');
     calls.push({ path: url.pathname, method: req.method });
     function json(body, status = 200) { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); }
+    if (url.pathname === '/test/graph' && req.method === 'POST') {
+      let raw='';for await (const chunk of req) raw+=chunk;const body=JSON.parse(raw);
+      if (Array.isArray(body.assigned)) graph.assigned=new Set(body.assigned);
+      if (typeof body.offline==='boolean') graph.offline=body.offline;
+      if (typeof body.required==='boolean') graph.required=body.required;
+      return json({ok:true});
+    }
+    if (url.pathname.startsWith('/graph/')) {
+      if (req.headers.authorization !== 'Bearer graph-test-token-never-store') return json({error:'invalid_token'},401);
+      if (graph.offline) return json({error:'temporarily_unavailable'},503);
+      if (url.pathname.includes("/servicePrincipals(appId=")) return json({id:resourceId,appId:clientId,appRoleAssignmentRequired:graph.required});
+      if (url.pathname === `/graph/v1.0/servicePrincipals/${resourceId}/appRoleAssignedTo`) return json({value:[...graph.assigned].map(principalId=>({principalId,principalType:'User',resourceId}))});
+      return json({error:'not_found'},404);
+    }
     if (url.pathname.endsWith('/.well-known/openid-configuration')) return json(metadata);
     if (url.pathname.endsWith('/keys')) return json({ keys: [jwk] });
     if (url.pathname.endsWith('/authorize')) {
@@ -30,7 +47,12 @@ export async function mockMicrosoft(port = 8791) {
     }
     if (url.pathname.endsWith('/token') && req.method === 'POST') {
       let body = ''; for await (const chunk of req) body += chunk;
-      const params = new URLSearchParams(body), record = codes.get(params.get('code')); codes.delete(params.get('code'));
+      const params = new URLSearchParams(body);
+      if (params.get('grant_type') === 'client_credentials') {
+        if (params.get('client_id') !== clientId || params.get('client_secret') !== 'test-only-secret' || params.get('scope') !== 'https://graph.microsoft.com/.default') return json({error:'invalid_client'},401);
+        return json({access_token:'graph-test-token-never-store',token_type:'Bearer',expires_in:3600});
+      }
+      const record = codes.get(params.get('code')); codes.delete(params.get('code'));
       if (!record || params.get('client_id') !== clientId || params.get('client_secret') !== 'test-only-secret' || params.get('grant_type') !== 'authorization_code' || params.get('redirect_uri') !== record.params.get('redirect_uri') || createHash('sha256').update(params.get('code_verifier') || '').digest('base64url') !== record.params.get('code_challenge')) return json({ error: 'invalid_grant' }, 400);
       if (record.mode === 'offline') return json({ error: 'temporarily_unavailable' }, 503);
       const now = Math.floor(Date.now() / 1000);
@@ -41,6 +63,7 @@ export async function mockMicrosoft(port = 8791) {
         claims.oid = '88888888-8888-4888-8888-888888888888';
         claims.email = 'kiosk@entra.test'; claims.name = 'Kiosk'; claims.roles = ['SumaTime.Partner'];
       }
+      if (mode === 'auto-new') { claims.oid='dddddddd-dddd-4ddd-8ddd-dddddddddddd'; claims.email='new-assigned@entra.test'; delete claims.roles; }
       if (mode === 'auto-no-role') delete claims.roles;
       if (mode === 'auto-wrong-role') claims.roles = ['SumaTime.Admin', 'sumatime.partner'];
       if (mode === 'auto-malformed-role') claims.roles = 'SumaTime.Partner';
@@ -51,6 +74,7 @@ export async function mockMicrosoft(port = 8791) {
       if (mode === 'auto-updated') { claims.email = 'updated-contact@entra.test'; claims.name = 'Changed display'; }
       if (mode === 'auto-tenant') claims.tid = '66666666-6666-4666-8666-666666666666';
       if (mode === 'auto-expired') claims.exp = now - 3600;
+      if (mode === 'admin') { claims.oid = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'; claims.email='admin@entra.test'; }
       if (mode === 'bob') claims.oid = bobOid;
       if (mode === 'unknown') { claims.oid = '55555555-5555-4555-8555-555555555555'; claims.email = 'alice@entra.test'; }
       if (mode === 'tenant') claims.tid = '66666666-6666-4666-8666-666666666666';
@@ -67,5 +91,5 @@ export async function mockMicrosoft(port = 8791) {
     json({ error: 'not_found' }, 404);
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
-  return { server, calls, codes };
+  return { server, calls, codes, graph };
 }

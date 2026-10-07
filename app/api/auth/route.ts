@@ -22,8 +22,14 @@ function password(value: unknown) {
 }
 type Account = { member_id: string; provider: string; password_hash: string | null; active: number; must_change: number };
 export async function GET() {
-  const me = await getMember();
-  return reply({ setup: !sqlite().prepare('SELECT 1 FROM accounts LIMIT 1').get(), ldap: ldapEnabled(), entra: entraStatus(), ...(me?.role === 'admin' ? { entraTenantId: process.env.ENTRA_TENANT_ID || '' } : {}), me });
+  const settings = { setup: !sqlite().prepare('SELECT 1 FROM accounts LIMIT 1').get(), ldap: ldapEnabled(), entra: entraStatus() };
+  try {
+    const me = await getMember();
+    return reply({ ...settings, ...(me?.role === 'admin' ? { entraTenantId: process.env.ENTRA_TENANT_ID || '' } : {}), me });
+  } catch (error) {
+    if (error instanceof AuthError) return reply({ ...settings, error: error.message, code: error.code, retryable: error.retryable, preserveOperation: error.preserveOperation }, error.status);
+    return reply({ ...settings, error: 'Vérification de votre accès impossible. Réessayez.' }, 503);
+  }
 }
 export async function POST(request: Request) {
   try {

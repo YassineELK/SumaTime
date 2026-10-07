@@ -2,7 +2,8 @@ import * as oidc from 'openid-client';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { sqlite, transaction } from '@/db/raw';
 import { AuthError, tokenHash } from './auth';
-import { entraConfiguration, entraGuid, ENTRA_PARTNER_ROLE } from './entra-config';
+import { entraConfiguration, entraGuid } from './entra-config';
+import { entraAssigned } from './entra-assignments';
 export const ENTRA_FLOW_COOKIE = 'sumatoni_entra_flow';
 const FLOW_SECONDS = 600;
 type Configuration = NonNullable<ReturnType<typeof entraConfiguration>>;
@@ -57,10 +58,9 @@ export function consumeEntraFlow(url: URL, browser: string | undefined): Flow {
   if (!flow) throw new AuthError('Connexion expirée. Réessayez.', 400);
   return flow;
 }
-function resolveEntraMember(config: Configuration, objectId: string, claims: Record<string, unknown>) {
-  // Only an app role in the already signature-validated ID token authorizes
-  // provisioning. Default access, email domain and display names never do.
-  const entitled = Array.isArray(claims.roles) && claims.roles.every(role => typeof role === 'string') && claims.roles.includes(ENTRA_PARTNER_ROLE);
+function resolveEntraMember(config: Configuration, objectId: string, claims: Record<string, unknown>, entitled: boolean) {
+  // Identity claims are already validated; entitlement comes only from Graph.
+  // Email, role claims and tenant membership cannot grant an assignment.
   const denied = () => new AuthError('Ce compte Microsoft n’a pas accès à SumaTime. Contactez votre administrateur.', 403);
   return transaction(db => {
     const existing = db.prepare(`SELECT m.id,m.active,p.member_id AS provisioned
@@ -98,9 +98,17 @@ export async function finishEntra(config: Configuration, url: URL, flow: Flow) {
   const claims = tokens.claims();
   if (!claims || claims.iss !== config.issuer || entraGuid(claims.tid) !== config.tenantId) throw new AuthError('Compte Microsoft non autorisé.', 403);
   const objectId = entraGuid(claims.oid);
-  const maxAge = Math.min(config.sessionSeconds, Math.floor(claims.exp - Date.now() / 1000));
+  let maxAge = Math.min(config.sessionSeconds, Math.floor(claims.exp - Date.now() / 1000));
   if (maxAge <= 0) throw new AuthError('Session expirée. Reconnectez-vous.', 401);
-  const memberId = resolveEntraMember(config, objectId, claims);
+  let entitled = false;
+  if (config.accessMode === 'assignment') {
+    try { entitled = await entraAssigned(config, objectId, true); }
+    catch { throw new AuthError('Le contrôle des accès Microsoft est indisponible. Réessayez plus tard.', 503); }
+    if (!entitled) throw new AuthError('Ce compte Microsoft n’a pas accès à SumaTime. Contactez votre administrateur.', 403);
+  }
+  maxAge = Math.min(config.sessionSeconds, Math.floor(claims.exp - Date.now() / 1000));
+  if (maxAge <= 0) throw new AuthError('Session expirée. Reconnectez-vous.', 401);
+  const memberId = resolveEntraMember(config, objectId, claims, entitled);
   return { memberId, tenantId: config.tenantId, objectId, maxAge };
 }
 export function linkEntraIdentity(memberId: string, tenant: unknown, object: unknown, actorId: string) {

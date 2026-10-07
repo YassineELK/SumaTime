@@ -1,6 +1,14 @@
 # Versions de Sumatoni Time
 
-## v0.4.1 — création automatique des partenaires Entra, 7 octobre 2026
+## v0.4.2 — développement, 7 octobre 2026
+
+- Contrôle des attributions individuelles Entra via Graph, y compris Accès par défaut, sans rôle personnalisé à créer. Permission Application.Read.All en lecture avec consentement administrateur.
+- Création de partenaires après vérification explicite de l’attribution ; droits et historiques existants conservés. Lecture fraîche à chaque connexion, contrôle des sessions avec cache de 60 secondes.
+- Retrait d’attribution : sessions Microsoft révoquées, prestations conservées. Panne Graph : refus temporaire 503, formulaires conservés et accès local disponible.
+- Graph limité à HTTPS, pagination complète, réponses bornées et secrets uniquement en mémoire. Mode manuel inchangé par défaut ; création automatique désactivée.
+- Développement et recette simulée uniquement, aucune bascule de production.
+
+## v0.4.1 — proposition refusée, non déployée : création automatique des partenaires Entra, 7 octobre 2026
 
 - Compte partenaire créé à la première connexion avec le rôle applicatif signé `SumaTime.Partner`, lorsque le provisionnement est activé. Les attributions Microsoft « Accès par défaut » ne donnent pas cette autorisation.
 - Identités et rôles existants conservés ; jamais de fusion par email ni de promotion automatique. Comptes sans mailbox acceptés via leur UPN.
