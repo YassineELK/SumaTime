@@ -1,3 +1,6 @@
+# SumaTime access logs deliberately omit query parameters and Referer.
+log_format sumatoni_time '$remote_addr - $remote_user [$time_local] "$request_method $uri $server_protocol" $status $body_bytes_sent';
+
 # Replace the hostname and install the chosen certificate before enabling this site.
 # A self-signed certificate requires explicit trust on each client device.
 # The application source and database are never served as static directories.
@@ -5,6 +8,7 @@ server {
     listen 80;
     listen [::]:80;
     server_name sumatime.home.sumatoni.be;
+    access_log /var/log/nginx/sumatoni-time-access.log sumatoni_time;
     return 308 https://sumatime.home.sumatoni.be$request_uri;
 }
 
@@ -12,6 +16,7 @@ server {
     listen 443 ssl;
     listen [::]:443 ssl;
     server_name sumatime.home.sumatoni.be;
+    access_log /var/log/nginx/sumatoni-time-access.log sumatoni_time;
     ssl_certificate /etc/sumatoni-time/tls/fullchain.pem;
     ssl_certificate_key /etc/sumatoni-time/tls/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;

@@ -1,5 +1,11 @@
 # Versions de Sumatoni Time
 
+## v0.4.0 — 7 octobre 2026
+
+- Promotion de la connexion Entra facultative sur l’adresse HTTPS de production, avec accès local et données existantes conservés.
+- Activation Microsoft après configuration du tenant, du secret serveur et du rattachement explicite du pilote. La validation réelle Microsoft reste une étape distincte du déploiement.
+- Journaux Nginx SumaTime sans paramètres de requête pour ne pas enregistrer les codes OIDC. Saisie du secret client dans un terminal SSH avec entrée masquée et sauvegarde privée des réglages.
+
 ## v0.4.0-dev.1 — développement, 7 octobre 2026
 
 - Connexion Microsoft 365 Sumatoni par Entra ID, facultative et désactivée par défaut. Flux serveur OIDC avec PKCE et validation des jetons signés.
