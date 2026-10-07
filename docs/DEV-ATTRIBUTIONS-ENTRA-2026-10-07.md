@@ -44,3 +44,11 @@ Suivre [le guide Microsoft](PROVISIONNEMENT-ENTRA.md) : permission d’applicati
 La recette réelle avec Kiosk et un utilisateur non attribué reste à faire après ces réglages, sur une URI HTTPS autorisée. Le simulateur ne prouve pas la disponibilité de la permission dans le tenant réel. Une future mise en production exige un accord explicite, une sauvegarde fraîche, la comparaison des données et la validation de l’accès local de secours.
 
 Après d’éventuels comptes automatiques en production, désactiver Microsoft avant de revenir à v0.4.0 : l’ancien code ne vérifie pas leur attribution Graph. Conserver la base courante et le secours local, sans restaurer une ancienne base qui ferait perdre les prestations plus récentes.
+
+## Vérification réelle de la configuration Microsoft
+
+Après confirmation du propriétaire qu’il avait ajouté l’autorisation Graph de type Application et accordé le consentement, contrôle en lecture seule effectué avec les credentials existants, restés sur le serveur de production. Le token applicatif Graph est obtenu et les lectures du principal de service et de ses attributions réussissent. Aucun token/secret conservé dans ce document ou les résultats.
+
+Résultat : application SumaTime, Affectation requise = Oui, quatre utilisateurs individuellement attribués, Kiosk présent, Object ID du pilote administrateur présent. Production toujours `/opt/sumatoni-time/releases/v0.4.0`, configuration applicative inchangée. Il s’agit d’une validation réelle de Graph et des réglages ; la connexion interactive de Kiosk avec création de compte reste à tester.
+
+Une demande d’autorisation distincte de déploiement et d’activation v0.4.2 a été présentée au propriétaire, précisant création de partenaires uniquement sur attribution individuelle vérifiée, sauvegarde fraîche et conservation de la base de production. Aucune bascule ou activation en attente de sa réponse.
