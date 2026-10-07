@@ -1,6 +1,6 @@
 # SumaTime — comptes automatiques à partir des attributions Entra
 
-Version 0.4.2 en développement sur CT-ANT, **non déployée en production**. Ce guide remplace la proposition 0.4.1 fondée sur un rôle applicatif, refusée par le propriétaire. Aucun rôle personnalisé à créer pour cette version.
+Version **0.4.2 déployée en production le 7 octobre 2026**, avec contrôle Graph et création automatique activés après autorisation. Voir [le compte rendu](DEPLOIEMENT-V0.4.2-2026-10-07.md). Ce guide remplace la proposition 0.4.1 fondée sur un rôle applicatif, refusée par le propriétaire. Aucun rôle personnalisé à créer pour cette version.
 
 ## Fonctionnement pour l’administrateur et le prestataire
 
@@ -14,13 +14,13 @@ Le Tenant ID et l’Object ID constituent l’identité stable ; email ou UPN se
 2. **Inscriptions d’applications → SumaTime → Autorisations API → Ajouter une autorisation → Microsoft Graph → Autorisations d’application → Application.Read.All.** Choisir le type Application, pas Déléguée.
 3. Accorder le **consentement administrateur** pour Sumatoni. Aucun droit d’écriture d’attribution ni accès aux mails n’est demandé.
 4. Conserver les attributions individuelles existantes avec **Accès par défaut**. Vérifier qu’un utilisateur de test ordinaire est attribué et qu’un autre ne l’est pas.
-5. L’URI Web de retour de production reste `https://sumatime.home.sumatoni.be/api/auth/entra/callback`. Garder le secret côté serveur, sans le copier dans le chat. La validation réelle sur cette adresse et toute mise en production restent à autoriser séparément.
+5. L’URI Web de retour de production reste `https://sumatime.home.sumatoni.be/api/auth/entra/callback`. Garder le secret côté serveur, sans le copier dans le chat. Le déploiement et l’activation ont été autorisés ; la connexion interactive de Kiosk reste à vérifier.
 
 `Application.Read.All` permet de lire les applications et les principaux de service du tenant : **Microsoft ne limite pas cette permission à SumaTime**. Le code interroge uniquement le principal de service dont l’App ID est configuré, puis ses attributions ; les permissions ne permettent aucune écriture. Ce périmètre de lecture doit être accepté avant activation.
 
 L’attribution individuelle n’utilise pas la fonction d’attribution par groupe P1/P2. Aucun rôle d’administration personnalisé, rôle d’application nommé, licence de boîte mail ou accès aux mails n’est nécessaire à ce mécanisme. Les groupes ne sont pas interprétés par cette version : attribuer chaque utilisateur directement.
 
-## Configuration serveur future
+## Configuration serveur active en production
 
 ```dotenv
 ENTRA_ENABLED=true
@@ -29,9 +29,9 @@ ENTRA_AUTO_PROVISION=true
 ENTRA_SESSION_MINUTES=60
 ```
 
-Ces valeurs sont une configuration **future**, pas l’état actuel de production. Tenant ID, Client ID et secret continuent d’utiliser les paramètres OIDC existants. L’ID du principal de service de SumaTime est recherché par son Client ID : ne pas utiliser l’Object ID de l’inscription comme ID utilisateur.
+Ces valeurs sont actives sur le serveur de production depuis le 7 octobre 2026. Tenant ID, Client ID et secret continuent d’utiliser les paramètres OIDC existants. L’ID du principal de service de SumaTime est recherché par son Client ID : ne pas utiliser l’Object ID de l’inscription comme ID utilisateur.
 
-Le mode par défaut reste `ENTRA_ACCESS_MODE=manual` et `ENTRA_AUTO_PROVISION=false`, compatible avec la production actuelle. Activer la création automatique en mode manuel est une configuration invalide qui refuse Microsoft plutôt que d’ouvrir les accès.
+Le mode par défaut reste `ENTRA_ACCESS_MODE=manual` et `ENTRA_AUTO_PROVISION=false`, utilisé lorsqu’aucune activation explicite n’est configurée. Activer la création automatique en mode manuel est une configuration invalide qui refuse Microsoft plutôt que d’ouvrir les accès.
 
 ## Contrôles et révocation
 
@@ -47,11 +47,11 @@ Le mode par défaut reste `ENTRA_ACCESS_MODE=manual` et `ENTRA_AUTO_PROVISION=fa
 
 La migration `0009_entra_provision.sql` reste additive. Aucun remplacement de base de production par une base de développement. Les comptes automatiques ne reçoivent pas de mot de passe local ; un éventuel accès local distinct reste géré explicitement par l’administrateur.
 
-## Recette à terminer dans le tenant réel avant activation
+## Recette interactive à terminer dans le tenant réel
 
-Tester Kiosk attribué, un utilisateur ordinaire non attribué, une deuxième connexion sans doublon, le retrait et la réattribution, le refus d’une action protégée après retrait, le compte administrateur existant et l’accès local de secours. Comparer les données avant/après. Les tests automatisés utilisent des simulateurs signés et des bases QA isolées ; ils ne remplacent pas la recette réelle avec les permissions du tenant.
+Les lectures Graph réelles réussissent, les quatre attributions individuelles sont visibles et le runtime exact a validé l’administrateur et le secours local sur une copie privée. Les 15 prestations ont été comparées après bascule. Tester maintenant Kiosk attribué, un utilisateur ordinaire non attribué, une deuxième connexion sans doublon, le retrait et la réattribution, le refus d’une action protégée après retrait, le compte administrateur existant et l’accès local de secours. Comparer les données avant/après. Les tests automatisés utilisent des simulateurs signés et des bases QA isolées ; ils ne remplacent pas la recette réelle avec les permissions du tenant.
 
-## Retour au code précédent après une future mise en production
+## Retour au code précédent
 
 Si des comptes ont été créés automatiquement, désactiver Microsoft avant de revenir à v0.4.0, car cette version ne contrôle pas l’attribution Graph. Utiliser le compte local de secours et conserver la base courante. Ne pas restaurer une ancienne base au détriment des prestations enregistrées depuis.
 

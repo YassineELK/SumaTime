@@ -1,6 +1,6 @@
 # SumaTime 0.4.2 — développement du contrôle des attributions Entra
 
-Développement autorisé le 7 octobre 2026, après le refus de l’approche par rôle personnalisé. Réalisé sur CT-ANT, branche `codex/entra-assignments`, commit applicatif `5040bbc5bb5947451145ee3baf4b38415ab3acc3`. **Aucune mise en production ni activation automatique sur le tenant réel.**
+Développement autorisé le 7 octobre 2026, après le refus de l’approche par rôle personnalisé. Réalisé sur CT-ANT, branche `codex/entra-assignments`, commit applicatif `5040bbc5bb5947451145ee3baf4b38415ab3acc3`. Ce document conserve la recette de développement. La mise en production et l’activation ont ensuite été autorisées et effectuées : voir [le compte rendu du déploiement](DEPLOIEMENT-V0.4.2-2026-10-07.md).
 
 ## Résultat livré
 
@@ -51,4 +51,4 @@ Après confirmation du propriétaire qu’il avait ajouté l’autorisation Grap
 
 Résultat : application SumaTime, Affectation requise = Oui, quatre utilisateurs individuellement attribués, Kiosk présent, Object ID du pilote administrateur présent. Production toujours `/opt/sumatoni-time/releases/v0.4.0`, configuration applicative inchangée. Il s’agit d’une validation réelle de Graph et des réglages ; la connexion interactive de Kiosk avec création de compte reste à tester.
 
-Une demande d’autorisation distincte de déploiement et d’activation v0.4.2 a été présentée au propriétaire, précisant création de partenaires uniquement sur attribution individuelle vérifiée, sauvegarde fraîche et conservation de la base de production. Aucune bascule ou activation en attente de sa réponse.
+Une demande d’autorisation distincte de déploiement et d’activation v0.4.2 a été présentée au propriétaire, précisant création de partenaires uniquement sur attribution individuelle vérifiée, sauvegarde fraîche et conservation de la base de production. Le propriétaire a répondu « tu peux poursuivre ». La bascule et l’activation ont ensuite réussi, avec sauvegardes avant/après et conservation des 15 prestations. Voir le compte rendu de production ; la connexion interactive de Kiosk reste à valider.

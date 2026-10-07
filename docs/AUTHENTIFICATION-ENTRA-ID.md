@@ -1,10 +1,10 @@
 # SumaTime — connexion Microsoft Entra ID
 
-Version **0.4.0**, déployée sur la production le 7 octobre 2026 à la demande du propriétaire. Le pilote Microsoft utilise désormais l’adresse HTTPS de production ; le secret est installé, Microsoft est activé et la connexion interactive réelle reste à vérifier. Les données et comptes locaux sont conservés. Aucun changement du SSO GLPI. Voir [le compte rendu de déploiement](DEPLOIEMENT-V0.4.0-2026-10-07.md).
+Version **0.4.2**, déployée le 7 octobre 2026 après autorisation du propriétaire. Microsoft et le contrôle des attributions individuelles Graph sont actifs sur l’adresse HTTPS de production ; les partenaires attribués peuvent recevoir leur compte à la première connexion. Le compte local, les droits existants et les 15 prestations sont conservés. Aucun changement du SSO GLPI. Voir [le compte rendu de déploiement](DEPLOIEMENT-V0.4.2-2026-10-07.md).
 
 ## Création automatique des partenaires
 
-La version **0.4.2 en développement** remplace l’approche par rôle de la 0.4.1, refusée et non déployée. Le mode optionnel `ENTRA_ACCESS_MODE=assignment` contrôle directement les attributions individuelles à l’application SumaTime via Microsoft Graph, y compris « Accès par défaut ». `ENTRA_AUTO_PROVISION=true` crée seulement des partenaires après confirmation de l’attribution. Les comptes existants conservent leur identité, leurs droits et leurs prestations. Voir [le guide de provisionnement](PROVISIONNEMENT-ENTRA.md). La production 0.4.0 conserve le comportement de rattachement manuel ; aucune activation nouvelle n’a été effectuée.
+La version **0.4.2 en production** remplace l’approche par rôle de la 0.4.1, refusée et non déployée. Le mode optionnel `ENTRA_ACCESS_MODE=assignment` contrôle directement les attributions individuelles à l’application SumaTime via Microsoft Graph, y compris « Accès par défaut ». `ENTRA_AUTO_PROVISION=true` crée seulement des partenaires après confirmation de l’attribution. Les comptes existants conservent leur identité, leurs droits et leurs prestations. Voir [le guide de provisionnement](PROVISIONNEMENT-ENTRA.md). Le mode attribution et la création automatique sont activés en production après vérification des permissions réelles Graph.
 
 ## Comportement livré
 
@@ -23,12 +23,12 @@ Un membre connecté avec Microsoft ne reçoit pas de formulaire de changement de
 - `state` aléatoire et code d’autorisation liés à un cookie navigateur HttpOnly / SameSite=Lax. PKCE et nonce conservés côté serveur, dix minutes maximum, consommés une seule fois avant l’échange de code. Un retour rejoué ou provenant d’un autre navigateur est refusé.
 - Endpoints de connexion limités à HTTPS sur `login.microsoftonline.com`, lectures d’attribution limitées à `graph.microsoft.com`. Aucun paramètre de requête ne peut remplacer le tenant, l’URI de retour ou l’émetteur. Aucun contournement TLS en code applicatif.
 - Cookie de session HttpOnly, SameSite=Lax et Secure en HTTPS. Session Microsoft d’une heure par défaut, limitée aussi par l’expiration du jeton ; pas de conservation des jetons Microsoft dans SQLite ou le navigateur.
-- Migration additive `0008_entra_auth.sql`. `accounts` local/LDAP reste inchangé. Les tables `entra_identities`, `entra_sessions` et `entra_flows` isolent les nouvelles identités et sessions. `entra_identity_events` trace les rattachements et retraits avec l’administrateur qui les a effectués.
+- Migrations additives `0008_entra_auth.sql` et `0009_entra_provision.sql` (provenance des comptes automatiques). `accounts` local/LDAP reste inchangé. Les tables `entra_identities`, `entra_sessions` et `entra_flows` isolent les nouvelles identités et sessions. `entra_identity_events` trace les rattachements et retraits avec l’administrateur qui les a effectués.
 - Rattachements réservés aux administrateurs, protégés contre CSRF et doublons. Une identité Microsoft ne peut appartenir à deux membres. Il faut retirer un ancien rattachement avant de le remplacer.
 - Un membre désactivé ne peut pas se reconnecter. Désactivation dans SumaTime et retrait du rattachement coupent les sessions concernées. Une session Microsoft révoquée ne peut jamais redevenir une session locale par simple absence de rattachement.
 - Désactiver le connecteur, rendre sa configuration incomplète ou changer de tenant bloque immédiatement les anciennes sessions Microsoft. Les comptes locaux ne dépendent pas de la disponibilité Microsoft.
 
-Supprimer une assignation ou désactiver un utilisateur **seulement dans Entra** n’annule pas instantanément une session SumaTime existante. Elle expire au plus tard après la durée configurée ou l’expiration du jeton. Pour un départ urgent : désactiver aussi le membre dans SumaTime, ou retirer son rattachement. Pas de CAE ni de déconnexion Microsoft globale dans cette première version.
+En mode attribution, chaque nouvelle connexion relit Graph ; les sessions en cours vérifient l’attribution avec un cache de 60 secondes, auquel s’ajoute le délai de réplication Microsoft. Un retrait confirmé révoque les sessions Microsoft sans supprimer le membre ni ses prestations. Une panne Graph après expiration du cache refuse temporairement les opérations avec une erreur 503, en conservant les sessions et formulaires. Le mode manuel ne dispose pas de ce contrôle. Désactiver un utilisateur dans Entra n’est pas équivalent à retirer son attribution ; pour un départ urgent, désactiver aussi le membre dans SumaTime ou retirer son rattachement. Aucun CAE ni déconnexion Microsoft globale.
 
 ## Paramètres serveur
 
@@ -61,7 +61,7 @@ La prévisualisation CT-ANT utilise actuellement `http://192.168.10.131:5174`. C
 
 ## Recette réelle restant à effectuer
 
-Quand Microsoft sera configuré : connexion du pilote sur PC et téléphone, session Microsoft déjà ouverte, MFA si applicable, choix d’un autre compte, annulation, accès refusé à un utilisateur non rattaché, visibilité limitée du partenaire, même historique qu’en local, calendrier, chrono, export et tickets GLPI. Vérifier la déconnexion SumaTime, l’expiration, le retrait du rattachement et le compte local de secours. Aucune validation réelle Microsoft n’a été revendiquée avec le simulateur.
+Microsoft est configuré, ses permissions Graph ont été vérifiées et le démarrage OIDC HTTPS passe les contrôles. La recette interactive reste à effectuer : connexion du pilote sur PC et téléphone, session Microsoft déjà ouverte, MFA si applicable, choix d’un autre compte, annulation, accès refusé à un utilisateur non rattaché, visibilité limitée du partenaire, même historique qu’en local, calendrier, chrono, export et tickets GLPI. Vérifier la déconnexion SumaTime, l’expiration, le retrait du rattachement et le compte local de secours. Aucune validation réelle Microsoft n’a été revendiquée avec le simulateur.
 
 ## Vérifications automatisées
 
@@ -83,4 +83,4 @@ Vérifications réalisées le 7 octobre 2026 : build, TypeScript et ESLint cibl�
 
 ## État et livraison
 
-Fonctionnalité développée et testée en simulation. Prévisualisation CT-ANT seulement, Entra désactivé en attente de la configuration Microsoft. Aucun déploiement de production effectué. La connexion réelle et la mise en production feront l’objet d’une recette ultérieure après configuration du tenant et validation du propriétaire.
+La v0.4.2 est active en production, avec Graph et création automatique des partenaires. La prévisualisation CT-ANT conserve Entra désactivé. Vérifications v0.4.2 : 46 tests unitaires/DOM, 683 assertions Entra/Graph, 199 assertions API métier, 251 prestataire/GLPI, build et TypeScript réussis. Le runtime exact a validé le contrôle Graph réel et une session locale administrateur sur une copie privée de la base, sans remplacer la base active. Après déploiement, les 17 tables préexistantes ont été comparées, SQLite est intègre et 37 ressources HTTPS correspondent au paquet. La connexion interactive de Kiosk reste à effectuer ; aucun succès de cette connexion n’est revendiqué.
