@@ -1,6 +1,6 @@
 # SumaTime — connexion Microsoft Entra ID
 
-Version de développement **0.4.0-dev.1**, préparée sur CT-ANT le 7 octobre 2026. Aucune mise en production et aucun changement GLPI ou Microsoft 365 réalisés. Les prestataires utilisent les comptes Microsoft 365 Sumatoni. Le SSO GLPI existe déjà et reste indépendant.
+Version **0.4.0**, déployée sur la production le 7 octobre 2026 à la demande du propriétaire. Le pilote Microsoft utilise désormais l’adresse HTTPS de production ; il attend le secret client puis une connexion réelle. Les données et comptes locaux sont conservés. Aucun changement du SSO GLPI. Voir [le compte rendu de déploiement](DEPLOIEMENT-V0.4.0-2026-10-07.md).
 
 ## Comportement livré
 
