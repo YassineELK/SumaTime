@@ -45,6 +45,7 @@ export function sqlite() {
     CREATE TABLE IF NOT EXISTS login_limits (key TEXT PRIMARY KEY, attempts INTEGER NOT NULL, until INTEGER NOT NULL);`);
   db.exec(readFileSync(resolve('drizzle/0008_entra_auth.sql'), 'utf8'));
   db.exec(readFileSync(resolve('drizzle/0009_entra_provision.sql'), 'utf8'));
+  db.exec(readFileSync(resolve('drizzle/0010_member_role_events.sql'), 'utf8'));
   db.exec(`CREATE TABLE IF NOT EXISTS glpi_creations (
     request_id TEXT PRIMARY KEY, member_id TEXT NOT NULL REFERENCES members(id), api_url TEXT NOT NULL,
     payload_hash TEXT NOT NULL, payload_json TEXT, result_json TEXT, acknowledged_at TEXT,

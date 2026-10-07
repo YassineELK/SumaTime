@@ -31,6 +31,19 @@ try{
  await api(sessions[0].cookie,{action:'entraLink',id:baseline[0].id,tenantId:tenant,objectId:kioskOid},'/api/auth',403);
  await api(sessions[0].cookie,{action:'account',email:'bad@entra.test',name:'Bad',password:'Not-used-password'},'/api/auth',403);
  for(const mode of ['auto-extra-admin','auto-malformed-role','auto-updated']){const s=await login(mode);const current=(await api(s.cookie)).data.me;same(current.id,a.id);same(current.role,'partner');same(current.email,'kiosk@entra.test');same(current.name,'Kiosk');}
+ // A manually granted application role survives fresh Microsoft logins; old sessions never retain permissions.
+ await api(admin,{action:'memberRole',id:a.id,role:'admin',expectedRole:'partner'});
+ for(const session of sessions)same((await api(session.cookie)).data.me,null,'Promotion disconnects all previous Microsoft sessions');
+ const promoted=await login('auto-no-role');const promotedMe=(await api(promoted.cookie)).data.me;same(promotedMe.id,a.id);same(promotedMe.role,'admin','Explicit SumaTime promotion survives a role-free Microsoft token');
+ const promotedData=(await api(promoted.cookie,null,'/api/time')).data;same(promotedData.members.length,baseline.length+1,'Promoted Microsoft account can see the full team');
+ await api(promoted.cookie,{action:'memberRole',id:a.id,role:'partner',expectedRole:'admin'},'/api/auth',403);
+ await api(admin,{action:'memberRole',id:a.id,role:'partner',expectedRole:'admin'});
+ same((await api(promoted.cookie)).data.me,null,'Demotion revokes the Microsoft administrator session');
+ const demoted=await login('auto-extra-admin');same((await api(demoted.cookie)).data.me.role,'partner','Token admin claim cannot undo a local demotion');
+ same((await api(demoted.cookie,null,'/api/time')).data.members.length,1,'Demoted Microsoft account sees only its own data');
+ await api(demoted.cookie,{action:'memberRole',id:baseline.find(m=>m.role==='admin').id,role:'partner',expectedRole:'admin'},'/api/auth',403);
+ same(db.prepare('SELECT previous_role,new_role FROM member_role_events WHERE member_id=? ORDER BY rowid').all(a.id).map(row=>({...row})),[{previous_role:'partner',new_role:'admin'},{previous_role:'admin',new_role:'partner'}]);
+ sessions[0]=demoted;
  const upn=await login('auto-upn');same(upn.location,base+'/');same((await api(upn.cookie)).data.me.email,'unlicensed@entra.test','No mailbox or O365 licence needed');
  const ownerSession=await login('admin'),owner=(await api(ownerSession.cookie)).data.me;same(owner.role,'admin');same(owner.id,baseline.find(m=>m.role==='admin').id);
  // An actual recorded intervention survives every subsequent access change.

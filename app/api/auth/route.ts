@@ -6,6 +6,7 @@ import { hashPassword, validPassword, verifyPassword } from '@/lib/password';
 import { authenticateLdap, ldapEnabled } from '@/lib/ldap';
 import { entraStatus, entraGuid } from '@/lib/entra-config';
 import { linkEntraIdentity, unlinkEntraIdentity } from '@/lib/entra';
+import { changeMemberRole } from '@/lib/member-roles';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -105,6 +106,10 @@ export async function POST(request: Request) {
     }
     if (me.must_change) throw new AuthError('Changez d’abord votre mot de passe provisoire.', 403);
     if (me.role !== 'admin') throw new AuthError('Action réservée à l’administrateur.', 403);
+    if (body.action === 'memberRole') {
+      const changed = changeMemberRole(me.id, body.id, body.role, body.expectedRole);
+      return reply({ ok: true, changed });
+    }
     if (body.action === 'entraLink') {
       linkEntraIdentity(clean(body.id), body.tenantId, body.objectId, me.id);
       return reply({ ok: true });

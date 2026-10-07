@@ -1,5 +1,12 @@
 # Versions de Sumatoni Time
 
+## v0.4.3 — gestion des rôles, 7 octobre 2026
+
+- Équipe : attribution et retrait explicites du rôle administrateur, avec confirmation des droits et reconnexion du membre.
+- Contrôle serveur réservé aux administrateurs actifs, protection du rôle de l’acteur et du dernier administrateur local de secours, refus des changements devenus obsolètes.
+- Historique des changements de rôle et révocation transactionnelle des sessions locales, LDAP et Microsoft ; données, comptes et identité Microsoft conservés.
+- Les nouveaux comptes Microsoft restent partenaires par défaut. Le rôle choisi dans SumaTime est conservé lors des reconnexions Microsoft.
+
 ## v0.4.2 — 7 octobre 2026
 
 - Contrôle des attributions individuelles Entra via Graph, y compris Accès par défaut, sans rôle personnalisé à créer. Permission Application.Read.All en lecture avec consentement administrateur.

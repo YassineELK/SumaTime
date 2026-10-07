@@ -62,3 +62,7 @@ Si des comptes ont été créés automatiquement, désactiver Microsoft avant de
 - [Attribution individuelle et licence pour l’attribution par groupe](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/what-is-access-management).
 - [Permission Application.Read.All et consentement administrateur](https://learn.microsoft.com/en-us/graph/permissions-reference#applicationreadall).
 - [Affectation requise et exception administrateur général](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/application-properties).
+
+## Donner des droits administrateur
+
+À partir de la v0.4.3, après création du compte partenaire, un administrateur peut ouvrir **Équipe → Rendre administrateur** puis confirmer. Les sessions du membre sont déconnectées ; à sa reconnexion, le rôle choisi est conservé. Voir [la procédure](GESTION-DES-ROLES.md). Aucun rôle Entra personnalisé requis. La première connexion Kiosk et sa création automatique ont été validées par le propriétaire le 7 octobre 2026.

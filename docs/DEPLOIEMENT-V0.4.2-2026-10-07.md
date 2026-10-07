@@ -49,3 +49,7 @@ La connexion interactive de Kiosk n’a pas encore été réalisée. Utiliser le
 Pour suspendre seulement les nouveaux comptes : `ENTRA_AUTO_PROVISION=false`, puis redémarrer le service ; les comptes déjà créés restent sous contrôle Graph. Pour couper Microsoft entièrement : `ENTRA_ENABLED=false`, puis redémarrer ; conserver le compte local de secours.
 
 Avant un retour au code v0.4.0, désactiver Microsoft et la création automatique : l’ancien runtime ne contrôle pas les attributions des comptes créés par v0.4.2. Arrêter SumaTime, rétablir atomiquement le lien current vers la release v0.4.0, puis redémarrer avec Microsoft désactivé. Conserver la base courante et la clé GLPI ; ne pas restaurer une ancienne sauvegarde qui effacerait les prestations plus récentes. La migration additive peut rester présente.
+
+## Validation interactive du propriétaire
+
+Après le déploiement, le propriétaire confirme : « c’est validé il y a un compte kiosk ». La lecture suivante de production constate deux membres (un administrateur et un partenaire), un compte local et un membre provisionné Entra ; les 15 prestations sont conservées. La première connexion Kiosk et la création automatique de son compte sont donc validées par le propriétaire. Les autres essais interactifs ne sont pas revendiqués.
