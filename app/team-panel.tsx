@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import type { State, Member } from '@/lib/types';
 import { authAction } from './account-panel';
+import ProviderRateSettings from './provider-rate-settings';
 import { MemberFee } from './billing-settings';
 const blank = { name: '', email: '', provider: 'local', login: '', password: '', tenantId: '', objectId: '' };
 export default function TeamPanel({ data, reload, toggle }: { data: State; reload: () => void; toggle: (id: string, active: boolean) => void }) {
@@ -34,7 +35,7 @@ export default function TeamPanel({ data, reload, toggle }: { data: State; reloa
           <div className="team-actions">{m.id !== data.me?.id && <button className="secondary" disabled={busy || (!m.active && m.role === 'partner')} onClick={() => { setRoleChange({ id: m.id, role: m.role === 'admin' ? 'partner' : 'admin', expectedRole: m.role }); setError(''); setNotice(''); }}>{m.role === 'admin' ? 'Passer en prestataire' : 'Rendre administrateur'}</button>}{m.role !== 'admin' && <button className="secondary" disabled={busy} onClick={() => toggle(m.id, !m.active)}>{m.active ? 'Désactiver' : 'Réactiver'}</button>}
             {m.provider === 'local' && m.id !== data.me?.id && <button className="secondary" disabled={busy} onClick={() => { setReset(m.id); setPassword(''); }}>Réinitialiser le mot de passe</button>}
             {m.entra_object_id ? <button className="secondary" disabled={busy || (m.id === data.me?.id && data.me.provider === 'entra')} onClick={() => { if (confirm('Retirer l’accès Microsoft de ' + m.name + ' et déconnecter ses sessions Microsoft SumaTime ?' + (m.provider === 'entra' ? ' Ce membre n’a pas d’accès local ou LDAP.' : ''))) void save({ action: 'entraUnlink', id: m.id }, 'Rattachement Microsoft retiré. Sessions Microsoft déconnectées.'); }}>Retirer Microsoft</button> : <button className="secondary" disabled={busy} onClick={() => { setLink(m.id); setIdentity({ tenantId: settings.entraTenantId || '', objectId: '' }); }}>Rattacher Microsoft</button>}
-          </div><MemberFee member={m} onSaved={reload} />
+          </div><MemberFee member={m} onSaved={reload} /><ProviderRateSettings compact memberId={m.id} onSaved={reload} />
           {roleChange?.id === m.id && <form className="reset-form" aria-label={'Modifier le rôle de ' + m.name} onSubmit={async e => { e.preventDefault(); if (await save({ action: 'memberRole', ...roleChange }, 'Rôle modifié. Ce membre doit se reconnecter pour utiliser ses nouveaux droits.')) setRoleChange(null); }}>
             <h3>{roleChange.role === 'admin' ? 'Donner les droits administrateur' : 'Retirer les droits administrateur'} · {m.name}</h3>
             <p>{roleChange.role === 'admin' ? 'Cette personne pourra consulter, modifier et exporter toutes les prestations, gérer les clients, la facturation et les comptes de l’équipe.' : 'Cette personne pourra consulter et gérer uniquement ses propres prestations. Ses données et son historique seront conservés.'}</p>

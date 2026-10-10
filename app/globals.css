@@ -44,3 +44,10 @@
 .microsoft-switch{display:block;text-align:center;font-size:12px;margin:6px auto 0;text-decoration:underline;text-underline-offset:3px}
 
 .welcome-card form{display:grid;gap:16px}.welcome-card .microsoft-hint{margin:10px 0}.team-member .reset-form{display:grid;gap:14px}
+
+/* Provider remuneration stays readable in account and compact team settings. */
+.provider-rate-settings>p,.provider-rate-settings>form,.provider-rate-settings>.alert,.provider-rate-settings>.rate-history{margin-top:16px}
+.provider-rate-settings form{display:grid;gap:16px}
+.team-member>.provider-rate-settings{padding:0 20px 20px}
+.provider-rate-settings .rate-history ul{list-style:none;padding:0;margin:8px 0 0}
+.provider-rate-settings .rate-history .text-button{text-align:left;height:auto;white-space:normal;overflow-wrap:anywhere}

@@ -38,3 +38,7 @@ node tests/run-provider.mjs
 Le test API démarre le build de production sur le port 8787 avec une nouvelle base isolée. Sauvegarde : npm run db:backup. Les fichiers de l’ancien starter Sites restent des références historiques ; les commandes npm dev/build/start utilisent désormais exclusivement Next.js et Node.
 
 La branche de développement **0.4.0-dev.1** prépare le login Microsoft 365, désactivé par défaut. Voir [configuration et recette Entra](docs/AUTHENTIFICATION-ENTRA-ID.md). Aucun changement de production ou du SSO GLPI.
+
+### Confidentialité et tarif prestataire (v0.4.4)
+
+Les tarifs clients sont réservés aux administrateurs, y compris dans les réponses API et les exports. Mon compte → Mon tarif avec Sumatoni permet de saisir sa rémunération horaire et sa date d'application. Le relevé prestataire inclut cette rémunération et les déplacements, avec une alerte si un montant manque. Voir [la règle métier, les exports et les protections](docs/CONFIDENTIALITE-ET-TARIFS-PRESTATAIRES.md).

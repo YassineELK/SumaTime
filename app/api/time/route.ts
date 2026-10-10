@@ -5,6 +5,7 @@ import { database } from '@/db/raw';
 import { billedMinutes, brusselsToday, clockTime, csv, locationLabel, parseTime, validDate } from '@/lib/business';
 import type { Member, Entry } from '@/lib/types';
 import { partnerStatement } from '@/lib/partner-export';
+import { visibleEntry, providerRateColumn } from '@/lib/entry-visibility';
 import { validateGlpiTicketSelection } from '@/lib/glpi';
 import { PENDING_TICKET_LABEL, validGlpiTicketId, type TicketSource } from '@/lib/ticket-selection';
 
@@ -39,13 +40,13 @@ function filters(url: URL, member: Member) {
 }
 async function entriesFor(url: URL, member: Member) {
   const f = filters(url, member);
-  const result = await database().prepare(`SELECT e.*, c.name AS client, m.name AS member,
+  const result = await database().prepare(`SELECT e.*, c.name AS client, m.name AS member, ${providerRateColumn},
     CASE WHEN e.on_site=1 AND e.id=COALESCE((SELECT a.id FROM entries a WHERE a.id=td.anchor_entry_id AND a.on_site=1 AND a.member_id=e.member_id AND a.client_id=e.client_id AND a.date=e.date), (SELECT t.id FROM entries t WHERE t.member_id=e.member_id AND t.client_id=e.client_id AND t.date=e.date AND t.on_site=1 ORDER BY t.created_at,t.id LIMIT 1)) THEN 1 ELSE 0 END AS travel_counted,
     CASE WHEN e.on_site=1 AND e.id=COALESCE((SELECT a.id FROM entries a WHERE a.id=td.anchor_entry_id AND a.on_site=1 AND a.member_id=e.member_id AND a.client_id=e.client_id AND a.date=e.date), (SELECT t.id FROM entries t WHERE t.member_id=e.member_id AND t.client_id=e.client_id AND t.date=e.date AND t.on_site=1 ORDER BY t.created_at,t.id LIMIT 1)) THEN td.fee_cents ELSE 0 END AS travel_cents
     FROM entries e JOIN clients c ON c.id=e.client_id JOIN members m ON m.id=e.member_id
     LEFT JOIN travel_days td ON td.member_id=e.member_id AND td.client_id=e.client_id AND td.date=e.date WHERE ${f.clause} ORDER BY e.date DESC, e.start DESC LIMIT 5001`).bind(...f.values).all<Entry>();
   if (result.results.length > 5000) throw new HttpError('Plus de 5 000 prestations : réduisez la période ou ajoutez un filtre.');
-  return { rows: result.results, ...f };
+  return { rows: result.results.map(row => visibleEntry(row, member.role)), ...f };
 }
 function fail(error: unknown) {
   if (error instanceof HttpError || error instanceof AuthError) return response({ error: error.message, ...('code' in error && error.code ? { code: error.code } : {}) }, error.status);
@@ -85,13 +86,16 @@ export async function GET(request: Request) {
           const key = row.client_id + ':' + row.member_id + ':' + String(row.on_site);
           const item = groups.get(key) || { client: row.client, member: row.member, mode: locationLabel(row.on_site), real: 0, bill: 0, count: 0, amount: 0, missingRate: false, travel: 0, missingFee: false, trips: 0 };
           item.real += row.end - row.start; item.bill += billedMinutes(row.start, row.end); item.count++;
-          const amount = serviceAmount(row.start, row.end, row.hourly_rate_cents);
+          const amount = serviceAmount(row.start, row.end, (member.role === 'admin' ? row.hourly_rate_cents : row.provider_rate_cents ?? null));
           item.amount += amount || 0; item.missingRate ||= amount === null;
           item.travel += row.travel_cents || 0; item.missingFee ||= row.travel_counted === 1 && row.travel_cents === null; item.trips += row.travel_counted;
           groups.set(key, item);
         }
-        table = [['Client', 'Prestataire', 'Mode de prestation', 'Prestations', 'Minutes réelles', 'Minutes facturables', 'Heures facturables', 'Montant prestations EUR', 'Déplacements', 'Forfait prestataire EUR'], ...[...groups.values()].map(g => [g.client, g.member, g.mode, g.count, g.real, g.bill, (g.bill / 60).toFixed(2).replace('.', ','), g.missingRate ? '' : (g.amount / 100).toFixed(2).replace('.', ','), g.trips, g.missingFee ? '' : (g.travel / 100).toFixed(2).replace('.', ',')])];
-      } else table = [['ID', 'Client', 'Ticket', 'Source ticket', 'Prestataire', 'Date', 'Début', 'Fin', 'Description', 'Minutes réelles', 'Minutes facturables', 'Heures facturables', 'Statut', 'Mode de prestation', 'Tarif horaire EUR', 'Montant prestations EUR', 'Déplacement compté', 'Forfait prestataire EUR'], ...rows.map(e => [e.id, e.client, e.ticket, e.ticket_source === 'glpi' ? 'GLPI vérifié' : e.ticket_source === 'pending' ? PENDING_TICKET_LABEL : 'Historique', e.member, e.date, clockTime(e.start), clockTime(e.end), e.description, e.end - e.start, billedMinutes(e.start, e.end), (billedMinutes(e.start, e.end) / 60).toFixed(2).replace('.', ','), e.billed ? 'Facturé' : 'À facturer', locationLabel(e.on_site), e.hourly_rate_cents === null ? '' : (e.hourly_rate_cents / 100).toFixed(2).replace('.', ','), serviceAmount(e.start, e.end, e.hourly_rate_cents) === null ? '' : (serviceAmount(e.start, e.end, e.hourly_rate_cents)! / 100).toFixed(2).replace('.', ','), e.travel_counted ? 'Oui' : 'Non', e.travel_cents === null ? '' : (e.travel_cents / 100).toFixed(2).replace('.', ',')])];
+        table = [['Client', 'Prestataire', 'Mode de prestation', 'Prestations', 'Minutes réelles', 'Minutes facturables', 'Heures facturables', member.role === 'admin' ? 'Montant prestations EUR' : 'Montant prestataire EUR HT', 'Déplacements', 'Forfait prestataire EUR'], ...[...groups.values()].map(g => [g.client, g.member, g.mode, g.count, g.real, g.bill, (g.bill / 60).toFixed(2).replace('.', ','), g.missingRate ? '' : (g.amount / 100).toFixed(2).replace('.', ','), g.trips, g.missingFee ? '' : (g.travel / 100).toFixed(2).replace('.', ',')])];
+      } else {
+        const rate = (e: Entry) => member.role === 'admin' ? e.hourly_rate_cents : e.provider_rate_cents ?? null;
+        table = [['ID', 'Client', 'Ticket', 'Source ticket', 'Prestataire', 'Date', 'Début', 'Fin', 'Description', 'Minutes réelles', 'Minutes facturables', 'Heures facturables', 'Statut', 'Mode de prestation', member.role === 'admin' ? 'Tarif horaire EUR' : 'Tarif prestataire EUR HT', member.role === 'admin' ? 'Montant prestations EUR' : 'Montant prestataire EUR HT', 'Déplacement compté', 'Forfait prestataire EUR'], ...rows.map(e => [e.id, e.client, e.ticket, e.ticket_source === 'glpi' ? 'GLPI vérifié' : e.ticket_source === 'pending' ? PENDING_TICKET_LABEL : 'Historique', e.member, e.date, clockTime(e.start), clockTime(e.end), e.description, e.end - e.start, billedMinutes(e.start, e.end), (billedMinutes(e.start, e.end) / 60).toFixed(2).replace('.', ','), e.billed ? 'Facturé' : 'À facturer', locationLabel(e.on_site), rate(e) === null ? '' : (rate(e)! / 100).toFixed(2).replace('.', ','), serviceAmount(e.start, e.end, rate(e)) === null ? '' : (serviceAmount(e.start, e.end, rate(e))! / 100).toFixed(2).replace('.', ','), e.travel_counted ? 'Oui' : 'Non', e.travel_cents === null ? '' : (e.travel_cents / 100).toFixed(2).replace('.', ',')])];
+      }
       return new Response(csv(table), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="sumatoni-${kind === 'partner' ? 'releve-prestataire' : clientExport ? 'releve-client' : summary ? 'synthese' : 'detail'}-${from}-${to}.csv"`, 'Cache-Control': 'no-store' } });
     }
     const [clients, members] = await Promise.all([

@@ -1,8 +1,9 @@
 import { getMember, checkOrigin, AuthError } from '@/lib/auth';
 import { sqlite, transaction } from '@/db/raw';
+import { visibleEntry, providerRateColumn } from '@/lib/entry-visibility';
 import { brusselsToday } from '@/lib/business';
 import { timerSegments, reviewTimerSegments } from '@/lib/workday';
-import type { WorkTimer } from '@/lib/types';
+import type { Entry, WorkTimer } from '@/lib/types';
 import { validateGlpiTicketSelection } from '@/lib/glpi';
 import { PENDING_TICKET_LABEL, validGlpiTicketId } from '@/lib/ticket-selection';
 export const dynamic = 'force-dynamic';
@@ -20,12 +21,12 @@ export async function GET() {
     const me = await who(), today = brusselsToday();
     const date = new Date(today + 'T12:00:00Z'); date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7);
     const weekStart = date.toISOString().slice(0, 10);
-    const columns = 'e.*,c.name AS client,c.color,m.name AS member';
+    const columns = `e.*,c.name AS client,c.color,m.name AS member,${providerRateColumn}`;
     const joins = 'FROM entries e JOIN clients c ON c.id=e.client_id JOIN members m ON m.id=e.member_id';
     const week = sqlite().prepare(`SELECT ${columns} ${joins} WHERE e.member_id=? AND e.date>=? AND e.date<=? ORDER BY e.date,e.start`).all(me.id, weekStart, today);
     const recent = sqlite().prepare(`SELECT ${columns} ${joins} WHERE e.member_id=? ORDER BY e.date DESC,e.start DESC LIMIT 30`).all(me.id);
-    if (me.role !== 'admin') for (const row of [...week, ...recent]) row.hourly_rate_cents = null;
-    return json({ today, weekStart, week, recent, ...preview(current(me.id)) });
+    const safe = (row: unknown) => visibleEntry(row as Entry, me.role);
+    return json({ today, weekStart, week: week.map(safe), recent: recent.map(safe), ...preview(current(me.id)) });
   } catch (e) { return fail(e); }
 }
 export async function POST(request: Request) {

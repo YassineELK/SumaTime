@@ -1,5 +1,13 @@
 # Versions de Sumatoni Time
 
+## 0.4.4 — Confidentialité et tarif propre du prestataire
+
+- Correction de la divulgation des prix clients dans les prestations JSON et exports détaillés/synthétiques du prestataire ; filtrage serveur et affichage protégé.
+- Mon compte : tarif horaire avec Sumatoni, date d'application et historique, indépendant des tarifs de vente. Équipe : consultation/correction par l'administrateur.
+- Relevé prestataire : rémunération et total avec déplacements ; alertes explicites si un tarif ou forfait manque. Aucun montant client utilisé par défaut.
+- Migration additive 0011 et audit/version des changements ; les données existantes et les tarifs clients restent conservés.
+
+
 ## v0.4.3 — gestion des rôles, 7 octobre 2026
 
 - Le rôle s’affiche désormais « Prestataire » dans l’équipe, le profil, le calendrier, les filtres et les exports. La valeur technique historique reste compatible avec les comptes et données existants.
