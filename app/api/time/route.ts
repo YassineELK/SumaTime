@@ -4,6 +4,7 @@ import { amountCents, serviceAmount } from '@/lib/pricing';
 import { database } from '@/db/raw';
 import { billedMinutes, brusselsToday, clockTime, csv, locationLabel, parseTime, validDate } from '@/lib/business';
 import type { Member, Entry } from '@/lib/types';
+import { clientStatement } from '@/lib/client-export';
 import { partnerStatement } from '@/lib/partner-export';
 import { visibleEntry, providerRateColumn } from '@/lib/entry-visibility';
 import { validateGlpiTicketSelection } from '@/lib/glpi';
@@ -35,7 +36,7 @@ function filters(url: URL, member: Member) {
   const status = url.searchParams.get('status');
   if (status === 'open' || status === 'billed') { conditions.push('e.billed = ?'); values.push(status === 'billed' ? 1 : 0); }
   const q = url.searchParams.get('q')?.trim();
-  if (q) { if (q.length > 120) throw new HttpError('Recherche trop longue.'); conditions.push('(instr(lower(e.ticket), lower(?)) > 0 OR instr(lower(e.description), lower(?)) > 0)'); values.push(q, q); }
+  if (q) { if (q.length > 120) throw new HttpError('Recherche trop longue.'); conditions.push(`(instr(lower(e.ticket), lower(?)) > 0 OR instr(lower(e.description), lower(?)) > 0 OR instr(lower(COALESCE(e.ticket_title,'')), lower(?)) > 0)`); values.push(q, q, q); }
   return { clause: conditions.join(' AND '), values, from, to };
 }
 async function entriesFor(url: URL, member: Member) {
@@ -79,7 +80,7 @@ export async function GET(request: Request) {
         const clientId = url.searchParams.get('client');
         if (!clientId || !await db.prepare('SELECT id FROM clients WHERE id=?').bind(clientId).first()) throw new HttpError('Sélectionnez un client et appliquez les filtres avant de télécharger son relevé.');
         if (rows.some(row => row.on_site === null)) throw new HttpError('Certaines prestations anciennes ont un mode à confirmer. Indiquez À distance ou Sur site avant l’export client.');
-        table = [['Date', 'Début', 'Fin', 'Mode de prestation'], ...[...rows].sort((a,b) => a.date.localeCompare(b.date) || a.start-b.start || a.end-b.end).map(e => [e.date, clockTime(e.start), clockTime(e.end), locationLabel(e.on_site)])];
+        table = clientStatement(rows);
       } else if (summary) {
         const groups = new Map<string, { client: string; member: string; mode: string; real: number; bill: number; count: number; amount: number; missingRate: boolean; travel: number; missingFee: boolean; trips: number }>();
         for (const row of rows) {

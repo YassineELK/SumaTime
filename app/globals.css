@@ -51,3 +51,5 @@
 .team-member>.provider-rate-settings{padding:0 20px 20px}
 .provider-rate-settings .rate-history ul{list-style:none;padding:0;margin:8px 0 0}
 .provider-rate-settings .rate-history .text-button{text-align:left;height:auto;white-space:normal;overflow-wrap:anywhere}
+
+.entry-details .ticket-title{display:block;margin-top:3px;font-size:13px;font-weight:500;line-height:1.45;color:var(--ink);white-space:normal;overflow-wrap:anywhere}
