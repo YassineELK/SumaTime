@@ -39,3 +39,7 @@ Sauvegarde et preuves privées : `/var/backups/sumatime-preview/ticket-titles-20
 Test HTTP authentifié sur la prévisualisation : CSV client non vide à 7 colonnes, champ titre disponible, prix clients masqués et prestations d'autrui absentes pour un prestataire. Les comptes existants ne permettant pas ce contrôle sans changer leur état de première connexion, deux comptes/sessions de test temporaires ont été créés puis supprimés dans cet environnement de développement. Aucun mot de passe ni état de compte existant modifié, aucune prestation d'essai ajoutée.
 
 Aucun accès au serveur de production, aucun transfert de sa base, aucune modification de ses comptes, aucune migration ou installation en production pendant ce développement. La version attend une validation utilisateur avant toute future mise en production.
+
+## Promotion après validation
+
+Après validation de cette prévisualisation et autorisation explicite du propriétaire, les fonctions ont été publiées en version stable **0.4.5** le 21 octobre 2026. La prévisualisation reste séparée. Voir [les sauvegardes et preuves du déploiement](DEPLOIEMENT-V0.4.5-2026-10-21.md).

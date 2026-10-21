@@ -46,3 +46,7 @@ Les tarifs clients sont réservés aux administrateurs, y compris dans les répo
 ### Version de développement : intitulés GLPI et relevé client
 
 `0.4.5-dev.1` sur CT-ANT : conservation du titre avec chaque prestation/chrono, intitulé visible dans Prestations, recherche par titre et CSV client avec numéro/intitulé/durée facturable. Récupération explicite des titres historiques avec les droits GLPI personnels. Voir [les itérations, limites et validations](docs/TITRES-TICKETS-DEV-2026-10-21.md). Cette version n'est pas installée en production.
+
+### Production v0.4.5 — 21 octobre 2026
+
+Les fonctions de titres GLPI et d'export client enrichi ont été publiées après validation de la prévisualisation, avec sauvegardes avant/après et conservation vérifiée des données de production. Pour les anciens tickets, utiliser « Compléter les intitulés manquants » dans Prestations. Voir [le compte rendu de déploiement](docs/DEPLOIEMENT-V0.4.5-2026-10-21.md).
