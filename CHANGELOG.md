@@ -1,5 +1,12 @@
 # Versions de Sumatoni Time
 
+## 0.4.6-dev.1 — Prochaine version, développement uniquement
+
+- Retrait des mentions géographiques de fuseau dans les formulaires, le calendrier et le guide utilisateur.
+- Export client : durée facturable en heures décimales avec point (`1.5` pour 1 h 30), après arrondi au quart d'heure par prestation. Colonne « Durée facturable (heures) ».
+- Aucun changement des horaires enregistrés, du calcul des durées ni du fuseau technique interne. Aucune mise en production.
+
+
 ## 0.4.5 — 21 octobre 2026
 
 - Promotion de la version de développement validée : titres GLPI conservés, visibles et recherchables dans les prestations.

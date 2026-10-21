@@ -129,7 +129,7 @@ assert.equal(billedState.entries.find(e=>e.id===remote.id).hourly_rate_cents,900
 assert.equal(billedState.entries.filter(e=>e.member_id===aliceId).reduce((n,e)=>n+(e.travel_cents||0),0),2000);
 assert.equal(billedState.entries.filter(e=>e.member_id===bobMemberId).reduce((n,e)=>n+(e.travel_cents||0),0),2500);checks+=5;
 const clientCsv = await call(admin,null,`/api/time?from=${date}&to=${date}&client=${client_id}&export=client`);
-assert.equal(clientCsv.replace(/^\uFEFF/,'').split('\r\n')[0], '"Date";"Début";"Fin";"Durée facturable (minutes)";"Mode de prestation";"N° de ticket";"Intitulé du ticket"');
+assert.equal(clientCsv.replace(/^\uFEFF/,'').split('\r\n')[0], '"Date";"Début";"Fin";"Durée facturable (heures)";"Mode de prestation";"N° de ticket";"Intitulé du ticket"');
 assert.ok(clientCsv.includes('"Sur site"'));assert.ok(clientCsv.includes('"À distance"'));
 assert.ok(!/Alice|Bob|recette|FORMULA|SITE-A|Description|Partenaire|Prestataire|Forfait|Tarif/.test(clientCsv));
 assert.ok(!clientCsv.includes(aliceId));
