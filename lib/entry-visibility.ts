@@ -6,7 +6,7 @@ export function visibleEntry(row: Entry & { color?: string | null }, role: Membe
   if (role === 'admin') return row;
   return {
     id: row.id, member_id: row.member_id, client_id: row.client_id,
-    client: row.client, member: row.member, ticket: row.ticket,
+    client: row.client, member: row.member, ticket: row.ticket, ticket_title: row.ticket_title ?? null,
     ticket_source: row.ticket_source, glpi_ticket_id: row.glpi_ticket_id,
     date: row.date, start: row.start, end: row.end, description: row.description,
     on_site: row.on_site, billed: row.billed, version: row.version,

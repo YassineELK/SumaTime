@@ -33,6 +33,10 @@ export function sqlite() {
     if (!clientColumns.some(column => column.name === 'glpi_entity_id')) db.exec(readFileSync(resolve('drizzle/0005_provider_workspace.sql'), 'utf8'));
     const ticketColumns = db.prepare('PRAGMA table_info(entries)').all() as { name: string }[];
     if (!ticketColumns.some(column => column.name === 'ticket_source')) db.exec(readFileSync(resolve('drizzle/0007_ticket_integrity.sql'), 'utf8'));
+    const titleColumns = db.prepare('PRAGMA table_info(entries)').all() as { name: string }[];
+    if (!titleColumns.some(column => column.name === 'ticket_title')) db.exec('ALTER TABLE entries ADD COLUMN ticket_title TEXT');
+    const timerTitleColumns = db.prepare('PRAGMA table_info(work_timers)').all() as { name: string }[];
+    if (!timerTitleColumns.some(column => column.name === 'ticket_title')) db.exec('ALTER TABLE work_timers ADD COLUMN ticket_title TEXT');
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }
   db.exec(`CREATE TABLE IF NOT EXISTS accounts (

@@ -197,15 +197,17 @@ export async function POST(request: Request) {
       if (existing && (!Number.isInteger(body.version) || body.version < 1)) throw new HttpError('Version non valide.');
       if (existing?.billed) throw new HttpError('Cette prestation est facturée. Un administrateur doit d’abord la rouvrir.', 409);
       const unchangedIdentity = !!existing && existing.client_id === clientId && existing.ticket === claimedTicket && existing.ticket_source === claimedSource && existing.glpi_ticket_id === (claimedGlpiId ?? null);
+      let ticketTitle: string | null = null;
       let ticket: string, ticketSource: TicketSource, glpiTicketId: number | null, verifiedEntity: number | null = null;
       if (unchangedIdentity) {
+        ticketTitle = existing.ticket_title ?? null;
         ticket = existing.ticket; ticketSource = existing.ticket_source; glpiTicketId = existing.glpi_ticket_id;
       } else if (claimedSource === 'pending' && claimedGlpiId == null) {
         ticket = PENDING_TICKET_LABEL; ticketSource = 'pending'; glpiTicketId = null;
       } else if (claimedSource === 'glpi' && validGlpiTicketId(claimedGlpiId)) {
         const verified = await validateGlpiTicketSelection(member.id, claimedGlpiId, clientId);
         ticket = verified.ticket; ticketSource = verified.ticket_source; glpiTicketId = verified.glpi_ticket_id;
-        verifiedEntity = verified.entity;
+        verifiedEntity = verified.entity; ticketTitle = verified.title.trim() || null;
       } else {
         throw new AuthError('Sélectionnez un ticket GLPI proposé ou choisissez explicitement « À compléter ».', 400, { code: 'TICKET_SELECTION_REQUIRED', retryable: false, preserveOperation: true });
       }
@@ -227,8 +229,8 @@ export async function POST(request: Request) {
         const clientGuard = verifiedEntity === null ? '1=1' : 'EXISTS (SELECT 1 FROM clients WHERE id=? AND active=1 AND glpi_entity_id=?)';
         const guardValues = verifiedEntity === null ? [] : [clientId, verifiedEntity];
         const changed = existing
-          ? tx.prepare(`UPDATE entries SET client_id=?,ticket=?,ticket_source=?,glpi_ticket_id=?,date=?,start=?,end=?,description=?,on_site=?,hourly_rate_cents=?,updated_at=?,version=version+1 WHERE id=? AND version=? AND billed=0 AND ${clientGuard} AND ${overlap}`).run(clientId, ticket, ticketSource, glpiTicketId, date, start, end, description, onSite, hourlyRate, now, id, body.version, ...guardValues, owner, date, end, start, id)
-          : tx.prepare(`INSERT INTO entries (id,member_id,client_id,ticket,ticket_source,glpi_ticket_id,date,start,end,description,on_site,hourly_rate_cents,billed,version,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,? WHERE ${clientGuard} AND ${overlap}`).run(id, owner, clientId, ticket, ticketSource, glpiTicketId, date, start, end, description, onSite, hourlyRate, now, now, ...guardValues, owner, date, end, start, id);
+          ? tx.prepare(`UPDATE entries SET client_id=?,ticket=?,ticket_title=?,ticket_source=?,glpi_ticket_id=?,date=?,start=?,end=?,description=?,on_site=?,hourly_rate_cents=?,updated_at=?,version=version+1 WHERE id=? AND version=? AND billed=0 AND ${clientGuard} AND ${overlap}`).run(clientId, ticket, ticketTitle, ticketSource, glpiTicketId, date, start, end, description, onSite, hourlyRate, now, id, body.version, ...guardValues, owner, date, end, start, id)
+          : tx.prepare(`INSERT INTO entries (id,member_id,client_id,ticket,ticket_title,ticket_source,glpi_ticket_id,date,start,end,description,on_site,hourly_rate_cents,billed,version,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,? WHERE ${clientGuard} AND ${overlap}`).run(id, owner, clientId, ticket, ticketTitle, ticketSource, glpiTicketId, date, start, end, description, onSite, hourlyRate, now, now, ...guardValues, owner, date, end, start, id);
         if (changed.changes && onSite === 1) tx.prepare('INSERT OR IGNORE INTO travel_days (member_id,client_id,date,fee_cents,anchor_entry_id) SELECT ?,?,?,travel_fee_cents,? FROM members WHERE id=?').run(owner, clientId, date, id, owner);
         return { meta: { changes: Number(changed.changes) } };
       });

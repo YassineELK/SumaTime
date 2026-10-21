@@ -132,14 +132,15 @@ await call(bob,{action:'connect',token:'bob-test-token'},'/api/glpi');
 // Suggestions and server-authoritative ticket validation are GET-only. Direct
 // labels, missing tickets and entity/client mismatches never start a timer.
 const verifiedTimer={...timer,id:randomUUID(),ticket:'forged display',ticket_source:'glpi',glpi_ticket_id:101};
-await call(alice,verifiedTimer);equal(db.prepare('SELECT ticket,ticket_source,glpi_ticket_id FROM work_timers WHERE id=?').get(verifiedTimer.id).ticket,'GLPI-101');
-await call(alice,{action:'discard',id:verifiedTimer.id,version:1});
+await call(alice,{...verifiedTimer,ticket_title:'FORGED TITLE'});equal(db.prepare('SELECT ticket_title FROM work_timers WHERE id=?').get(verifiedTimer.id).ticket_title,'Configurer le VPN du nouveau collaborateur');equal(db.prepare('SELECT ticket,ticket_source,glpi_ticket_id FROM work_timers WHERE id=?').get(verifiedTimer.id).ticket,'GLPI-101');
+db.prepare('UPDATE work_timers SET started_at=?,stopped_at=? WHERE id=?').run(Date.parse('2026-09-17T06:00:00Z'),Date.parse('2026-09-17T06:15:00Z'),verifiedTimer.id);
+const titledTimerSaved=await call(alice,{action:'save',id:verifiedTimer.id,version:1,description:'Titre du chrono'});equal(db.prepare('SELECT ticket_title FROM entries WHERE id=?').get(titledTimerSaved.entry_ids[0]).ticket_title,'Configurer le VPN du nouveau collaborateur');
 const arbitraryTimer=await call(alice,{...verifiedTimer,id:randomUUID(),ticket_source:undefined,glpi_ticket_id:null},'/api/workday',400);equal(arbitraryTimer.code,'TICKET_SELECTION_REQUIRED');
 await call(alice,{...verifiedTimer,id:randomUUID(),glpi_ticket_id:999999},'/api/workday',400);
 await call(alice,{...verifiedTimer,id:randomUUID(),glpi_ticket_id:102},'/api/workday',409);
 await call(bob,{...verifiedTimer,id:randomUUID()},'/api/workday',400);equal((await call(bob)).timer,null);
 const verifiedEntry={action:'saveEntry',id:randomUUID(),client_id:client.id,ticket:'invented display ignored',ticket_source:'glpi',glpi_ticket_id:101,date:'2026-09-16',start:'08:00',end:'08:15',description:'Verified identity',on_site:false};
-await call(alice,verifiedEntry,'/api/time');equal({...db.prepare('SELECT ticket,ticket_source,glpi_ticket_id FROM entries WHERE id=?').get(verifiedEntry.id)},{ticket:'GLPI-101',ticket_source:'glpi',glpi_ticket_id:101});
+await call(alice,{...verifiedEntry,ticket_title:'FORGED TITLE'},'/api/time');equal(db.prepare('SELECT ticket_title FROM entries WHERE id=?').get(verifiedEntry.id).ticket_title,'Configurer le VPN du nouveau collaborateur');equal({...db.prepare('SELECT ticket,ticket_source,glpi_ticket_id FROM entries WHERE id=?').get(verifiedEntry.id)},{ticket:'GLPI-101',ticket_source:'glpi',glpi_ticket_id:101});
 // Session cleanup deterministically changes the client after Ticket/101 was
 // validated but before the local write. Both writes must fail atomically.
 const racedEntry={...verifiedEntry,id:randomUUID(),ticket:'À compléter',ticket_source:'pending',glpi_ticket_id:null,start:'08:30',end:'08:45'};
@@ -153,6 +154,7 @@ const remappedRace=await call(alice,racedTimer,'/api/workday',409);equal(remappe
 db.prepare('UPDATE clients SET active=1,glpi_entity_id=4 WHERE id=?').run(client.id);
 await call(alice,{action:'connect',token:'alice-test-token'},'/api/glpi');
 await call(alice,{action:'disconnect'},'/api/glpi');await call(alice,verifiedEntry,'/api/time'); // exact replay precedes provider validation
+equal(db.prepare('SELECT ticket_title FROM entries WHERE id=?').get(verifiedEntry.id).ticket_title,'Configurer le VPN du nouveau collaborateur');
 await call(alice,{action:'connect',token:'alice-test-token'},'/api/glpi');
 await call(alice,{...verifiedEntry,id:randomUUID(),ticket_source:undefined,glpi_ticket_id:null,start:'08:15',end:'08:30'},'/api/time',400);
 await call(alice,{...verifiedEntry,id:randomUUID(),glpi_ticket_id:999999,start:'08:15',end:'08:30'},'/api/time',400);
