@@ -1,5 +1,14 @@
 # Versions de Sumatoni Time
 
+## 0.4.5-dev.1 — 21 octobre 2026 — Développement uniquement
+
+- Titres GLPI vérifiés conservés avec les prestations et chronos ; corrections possibles hors ligne sans perdre le titre.
+- Prestations : numéro et intitulé visibles, recherche par titre.
+- Export client anonyme : ajout du numéro, de l'intitulé et de la durée facturable ; prix et identité du prestataire exclus.
+- Historique : action explicite pour compléter les titres manquants avec les accès GLPI personnels, sans modifier les heures ni écraser les titres/conflits.
+- Migration additive 0012, tests de droits, de conservation des données et de disponibilité hors ligne. Aucune mise en production.
+
+
 ## 0.4.4 — Confidentialité et tarif propre du prestataire
 
 - Correction de la divulgation des prix clients dans les prestations JSON et exports détaillés/synthétiques du prestataire ; filtrage serveur et affichage protégé.

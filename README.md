@@ -42,3 +42,7 @@ La branche de développement **0.4.0-dev.1** prépare le login Microsoft 365, d�
 ### Confidentialité et tarif prestataire (v0.4.4)
 
 Les tarifs clients sont réservés aux administrateurs, y compris dans les réponses API et les exports. Mon compte → Mon tarif avec Sumatoni permet de saisir sa rémunération horaire et sa date d'application. Le relevé prestataire inclut cette rémunération et les déplacements, avec une alerte si un montant manque. Voir [la règle métier, les exports et les protections](docs/CONFIDENTIALITE-ET-TARIFS-PRESTATAIRES.md).
+
+### Version de développement : intitulés GLPI et relevé client
+
+`0.4.5-dev.1` sur CT-ANT : conservation du titre avec chaque prestation/chrono, intitulé visible dans Prestations, recherche par titre et CSV client avec numéro/intitulé/durée facturable. Récupération explicite des titres historiques avec les droits GLPI personnels. Voir [les itérations, limites et validations](docs/TITRES-TICKETS-DEV-2026-10-21.md). Cette version n'est pas installée en production.
