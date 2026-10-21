@@ -50,3 +50,7 @@ Les tarifs clients sont réservés aux administrateurs, y compris dans les répo
 ### Production v0.4.5 — 21 octobre 2026
 
 Les fonctions de titres GLPI et d'export client enrichi ont été publiées après validation de la prévisualisation, avec sauvegardes avant/après et conservation vérifiée des données de production. Pour les anciens tickets, utiliser « Compléter les intitulés manquants » dans Prestations. Voir [le compte rendu de déploiement](docs/DEPLOIEMENT-V0.4.5-2026-10-21.md).
+
+### Prochaine version de développement : 0.4.6-dev.1
+
+Prévisualisation CT-ANT : mentions géographiques de fuseau retirées de l'interface, export client en heures décimales (`1.5` pour 1 h 30). Arrondi par prestation et données conservés. Voir [les changements et validations](docs/DEV-AFFICHAGE-EXPORT-2026-10-21.md). Cette préparation n'a pas été déployée en production.

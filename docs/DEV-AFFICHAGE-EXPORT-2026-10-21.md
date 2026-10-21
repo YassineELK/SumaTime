@@ -13,3 +13,11 @@ L'arrondi commercial reste appliqué à chaque prestation avant conversion : 16 
 ## Validation
 
 Tests ciblés des valeurs décimales, de l'arrondi, d'une fin à minuit, des titres et de l'exclusion des informations internes. Recettes API métier et titres/historique sur bases isolées. Build/TypeScript, ESLint ciblé et diff Git vérifiés.
+
+## Prévisualisation validée
+
+Version disponible sur http://192.168.10.131:5174 : `0.4.6-dev.1`, code `7ec6b8c61b94d5312d84a3ae12608824ea12412d`, build `FP4SfNzqtWrC51VB1fWiQ`. Six tests unitaires/affichage ciblés, 201 assertions API métier et 40 assertions titres/historique passent. Build/TypeScript et ESLint ciblé conformes. La recherche des anciennes mentions dans les sources d'interface ne renvoie plus d'occurrence.
+
+Les 3150 fichiers du runtime et les 39 ressources publiques ont été vérifiés. Comparaison intégrale des anciennes valeurs des 21 tables : inchangées. Les 2 membres/comptes, 2 clients et 8 prestations de développement sont conservés, ainsi que l'environnement et la clé GLPI. Sauvegarde et preuves privées : `/var/backups/sumatime-preview/decimal-hours-20261021`.
+
+Aucun accès ni déploiement en production pendant cette préparation. La production reste indépendante de cette prochaine version.
