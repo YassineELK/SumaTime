@@ -53,3 +53,5 @@
 .provider-rate-settings .rate-history .text-button{text-align:left;height:auto;white-space:normal;overflow-wrap:anywhere}
 
 .entry-details .ticket-title{display:block;margin-top:3px;font-size:13px;font-weight:500;line-height:1.45;color:var(--ink);white-space:normal;overflow-wrap:anywhere}
+
+.ticket-title-recovery{padding:0 22px 16px}.ticket-title-recovery .fine{margin:8px 0;font-size:12px}.ticket-title-recovery .alert{margin-top:10px}.ticket-title-recovery .secondary{white-space:normal;text-align:left}

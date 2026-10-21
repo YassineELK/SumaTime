@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {randomBytes,randomUUID,createHash} from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
+import {mockGlpi} from './glpi-mock.mjs';
+const directory=mkdtempSync(join(tmpdir(),'sumatime-title-qa-')),file=join(directory,'qa.sqlite'),url='http://127.0.0.1:8784';
+const env={...process.env,DATABASE_PATH:file,SETUP_TOKEN:randomBytes(32).toString('hex'),APP_URL:url,ENTRA_ENABLED:'false',ENTRA_AUTO_PROVISION:'false',LDAP_ENABLED:'false',HOSTNAME:'127.0.0.1',PORT:'8784',GLPI_API_URL:'http://127.0.0.1:8796/apirest.php',GLPI_APP_TOKEN:'mock-app-token',NEXT_TELEMETRY_DISABLED:'1'};
+let race,db,checks=0;const equal=(a,b,label)=>{assert.deepEqual(a,b,label);checks++;};
+const mock=await mockGlpi(8796,[4,9],{onSessionCleanup(){if(!race)return;const r=race;race=null;if(r==='demote')db.exec("UPDATE members SET role='partner' WHERE id='owner'");else if(r==='mapping')db.exec("UPDATE clients SET glpi_entity_id=9 WHERE id='client'");else db.prepare("UPDATE entries SET description='Concurrent user edit',version=version+1 WHERE id=?").run(r);}});
+const child=spawn(process.execPath,['.next/standalone/server.js'],{env,stdio:['ignore','pipe','pipe']});let logs='';child.stdout.on('data',c=>logs+=c);child.stderr.on('data',c=>logs+=c);
+async function request(path,token,payload,origin=url){const r=await fetch(url+path,{method:payload?'POST':'GET',headers:{...(token?{Cookie:'sumatoni_session='+token}:{}),...(payload?{'Content-Type':'application/json',Origin:origin}:{})},...(payload?{body:JSON.stringify(payload)}:{})});return{status:r.status,body:r.headers.get('content-type')?.includes('text/csv')?await r.text():await r.json()};}
+function session(id){const token=randomBytes(32).toString('hex');db.prepare('INSERT INTO sessions VALUES (?,?,?)').run(createHash('sha256').update(token).digest('hex'),id,Date.now()+3600000);return token;}
+function entry(source='glpi',ticketId=101,title=null,member='alice',ticket='GLPI-'+ticketId){const id=randomUUID();db.prepare('INSERT INTO entries(id,member_id,client_id,ticket,ticket_source,glpi_ticket_id,ticket_title,date,start,end,description,on_site,hourly_rate_cents,created_at,updated_at) VALUES (?,?,?,?,?,?,?, ?,540,555,?,0,98765,?,?)').run(id,member,'client',ticket,source,source==='glpi'?ticketId:null,title,'2026-10-01','Private description','created','updated');return id;}
+try{
+ for(let n=0;n<200;n++){if(child.exitCode!==null)throw Error(logs);try{if((await fetch(url+'/api/auth')).ok)break;}catch{}if(n===199)throw Error('not ready');await new Promise(r=>setTimeout(r,200));}
+ db=new DatabaseSync(file);db.exec('PRAGMA foreign_keys=ON;PRAGMA busy_timeout=5000');
+ for(const[id,role]of[['owner','admin'],['alice','partner'],['bob','partner']]){db.prepare('INSERT INTO members(id,email,name,role,active,created_at) VALUES (?,?,?,?,1,?)').run(id,id+'@example.test',id,role,'now');db.prepare("INSERT INTO accounts VALUES (?,?,'local','qa-hash',0)").run(id,id+'@example.test');}
+ db.exec("INSERT INTO clients(id,name,active,glpi_entity_id) VALUES ('client','Client',1,4)");
+ const owner=session('owner'),alice=session('alice'),bob=session('bob');for(const[token,glpi]of[[owner,'alice-test-token'],[alice,'alice-test-token'],[bob,'bob-test-token']])equal((await request('/api/glpi',token,{action:'connect',token:glpi})).status,200);
+ const a=entry(),b=entry('glpi',103),c=entry('legacy',104),manual=entry('legacy',null,null,'alice','MANUAL-REF'),pending=entry('pending',null,null,'alice','À compléter'),wrong=entry('glpi',102),missing=entry('glpi',999999),known=entry('glpi',101,'Original title'),peer=entry('glpi',101,null,'bob');
+ db.prepare('UPDATE entries SET billed=1 WHERE id=?').run(a);
+ const ids=[a,b,c,manual,pending,wrong,missing,known],before=db.prepare('SELECT id,member_id,client_id,ticket,ticket_source,glpi_ticket_id,date,start,end,description,on_site,hourly_rate_cents,billed FROM entries ORDER BY id').all();
+ equal((await request('/api/ticket-titles',null,{ids:[a]})).status,401);equal((await request('/api/ticket-titles',alice,{ids:[peer]})).status,403,'peer privacy');equal((await request('/api/ticket-titles',alice,{ids:[a]},'https://foreign.example')).status,403,'origin');
+ for(const ids of [[],['bad'],Array(41).fill(a)])equal((await request('/api/ticket-titles',alice,{ids})).status,400,'invalid selection');
+ const result=await request('/api/ticket-titles',alice,{ids});equal(result.status,200);equal(new Set(result.body.updated),new Set([a,b,c]),'open, resolved and closed historical titles recovered');equal(new Set(result.body.unavailable),new Set([wrong,missing]),'wrong entity and inaccessible rejected');equal(new Set(result.body.skipped),new Set([manual,pending,known]));
+ equal(db.prepare('SELECT ticket_title FROM entries WHERE id=?').get(a).ticket_title,'Configurer le VPN du nouveau collaborateur');equal(db.prepare('SELECT ticket_title FROM entries WHERE id=?').get(known).ticket_title,'Original title','snapshot never overwritten');equal({...db.prepare('SELECT ticket_source,glpi_ticket_id FROM entries WHERE id=?').get(c)},{ticket_source:'legacy',glpi_ticket_id:null},'legacy identity remains intact');
+ equal(db.prepare('SELECT id,member_id,client_id,ticket,ticket_source,glpi_ticket_id,date,start,end,description,on_site,hourly_rate_cents,billed FROM entries ORDER BY id').all(),before,'times, client agreements and billing states unchanged');
+ const count=mock.calls.length;equal((await request('/api/ticket-titles',alice,{ids:[known]})).status,200);equal(mock.calls.length,count,'known title needs no GLPI');
+ const state=await request('/api/time?from=2026-10-01&to=2026-10-01&q=VPN',alice);equal(state.status,200);equal(state.body.entries.map(e=>e.id),[a],'search by title');equal(state.body.entries[0].hourly_rate_cents,null,'sale price stays hidden');
+ const csv=await request('/api/time?from=2026-10-01&to=2026-10-01&client=client&export=client',owner);equal(csv.status,200);equal(csv.body.includes('Configurer le VPN'),true);equal(csv.body.includes('N° de ticket'),true);equal(/Private description|alice|bob|98765/.test(csv.body),false,'client statement stays anonymous');
+ const racing=entry();race=racing;const conflict=await request('/api/ticket-titles',alice,{ids:[racing]});equal(conflict.body.conflicts,[racing]);equal(db.prepare('SELECT ticket_title FROM entries WHERE id=?').get(racing).ticket_title,null);equal(db.prepare('SELECT description FROM entries WHERE id=?').get(racing).description,'Concurrent user edit');
+ const mapped=entry();race='mapping';const remap=await request('/api/ticket-titles',alice,{ids:[mapped]});equal(remap.body.conflicts,[mapped]);db.exec("UPDATE clients SET glpi_entity_id=4,active=0 WHERE id='client'");equal((await request('/api/ticket-titles',alice,{ids:[mapped]})).body.updated,[mapped],'archived client can recover historical title');db.exec("UPDATE clients SET active=1 WHERE id='client'");
+ const revoked=entry();race='demote';equal((await request('/api/ticket-titles',owner,{ids:[revoked]})).status,403,'authorization rechecked after GLPI');equal(db.prepare('SELECT ticket_title FROM entries WHERE id=?').get(revoked).ticket_title,null);db.exec("UPDATE members SET role='admin' WHERE id='owner'");
+ const offlineBaseline=(await request('/api/time?from=2026-10-01&to=2026-10-01&client=client&export=client',owner)).body;
+ await new Promise(resolve=>{mock.server.closeAllConnections();mock.server.close(resolve);});
+ equal((await request('/api/time?from=2026-10-01&to=2026-10-01&client=client&export=client',owner)).body,offlineBaseline,'offline export uses saved snapshot');
+ const version=db.prepare('SELECT version FROM entries WHERE id=?').get(mapped).version;
+ const edit=await request('/api/time',alice,{action:'saveEntry',id:mapped,version,client_id:'client',ticket:'GLPI-101',ticket_source:'glpi',glpi_ticket_id:101,ticket_title:'FORGED REPLACEMENT',date:'2026-10-01',start:'11:00',end:'11:15',on_site:false,description:'Offline correction'});equal(edit.status,200,'unchanged identity works offline');equal(db.prepare('SELECT ticket_title FROM entries WHERE id=?').get(mapped).ticket_title,'Configurer le VPN du nouveau collaborateur');
+ equal(mock.sessions.size,0,'GLPI sessions closed');equal(mock.calls.filter(c=>c.method==='POST'&&c.path==='Ticket').length,0,'no GLPI ticket created or updated');equal(db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');equal(db.prepare('PRAGMA foreign_key_check').all(),[]);
+ console.log(checks+' ticket-title/history API assertions passed. Isolated database and GLPI simulator only.');
+}catch(error){console.error(logs);throw error;}finally{db?.close();child.kill();await new Promise(r=>child.once('exit',r));if(mock.server.listening){mock.server.closeAllConnections();mock.server.close();}}

@@ -16,7 +16,8 @@ INSERT INTO entries(id,member_id,client_id,ticket,date,start,end,created_at,upda
 const baseline={};for(const table of ['members','accounts','sessions','clients','entries'])baseline[table]=old.prepare(`SELECT * FROM ${table}`).all();old.close();
 const {sqlite}=await import('../db/raw.ts');const db=sqlite();
 test('Entra migration is additive and preserves existing identities, sessions and billing data',()=>{
- for(const [table,rows]of Object.entries(baseline))assert.deepEqual(db.prepare(`SELECT * FROM ${table}`).all(),rows,table);
+ for(const [table,rows]of Object.entries(baseline)){const columns=Object.keys(rows[0]).map(name=>'"'+name+'"').join(',');assert.deepEqual(db.prepare(`SELECT ${columns} FROM ${table}`).all(),rows,table);}
+ assert.equal(db.prepare('SELECT ticket_title FROM entries').get().ticket_title,null,'new title is unknown, without rewriting historical fields');
  db.exec(readFileSync(resolve('drizzle/0008_entra_auth.sql'),'utf8'));db.exec(readFileSync(resolve('drizzle/0009_entra_provision.sql'),'utf8'));db.exec(readFileSync(resolve('drizzle/0009_entra_provision.sql'),'utf8'));assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');assert.equal(db.prepare('PRAGMA foreign_key_check').all().length,0);
 });
 test('identity uniqueness and persistent session markers prevent revoked Microsoft sessions falling back to local login',()=>{

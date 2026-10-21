@@ -212,6 +212,34 @@ export async function validateGlpiTicketSelection(member: string, ticketId: numb
   });
 }
 
+// Explicit historical enrichment reads GLPI only, using the caller's personal token.
+// Archived clients remain eligible; entity correspondence is still mandatory.
+export async function historicalGlpiTitles(member: string, pairs: { client_id: string; ticket_id: number }[]) {
+  const config = glpiConfig();
+  if (!config) throw new AuthError('GLPI doit être configuré pour compléter les intitulés.', 409);
+  if (!hasGlpiToken(member, config)) throw new AuthError('Connectez votre compte dans Mes tickets GLPI pour compléter les intitulés.', 409);
+  return session(config, tokenFor(member, config), async (get, post) => {
+    await selectReadableEntities(post);
+    const results: { client_id: string; ticket_id: number; title: string | null; entity: number | null }[] = [];
+    for (const pair of pairs) {
+      let raw: unknown;
+      try { raw = await get('Ticket/' + pair.ticket_id); }
+      catch (error) {
+        if (error instanceof AuthError && ['TICKET_SELECTION_REQUIRED', 'GLPI_ACCESS_DENIED'].includes(error.code || '')) {
+          results.push({ ...pair, title: null, entity: null }); continue;
+        }
+        throw error;
+      }
+      const ticket = object(raw), entity = integer(ticket?.entities_id);
+      if (integer(ticket?.id) !== pair.ticket_id || typeof ticket?.name !== 'string' || entity === null) throw new AuthError('GLPI a renvoyé un ticket invalide.', 502);
+      const client = sqlite().prepare('SELECT glpi_entity_id FROM clients WHERE id=?').get(pair.client_id) as { glpi_entity_id: number | null } | undefined;
+      const title = client?.glpi_entity_id === entity ? ticket.name.trim().slice(0, 1000) || null : null;
+      results.push({ ...pair, title, entity });
+    }
+    return results;
+  });
+}
+
 export type GlpiCreateInput = { request_id: string; client_id: string; title: string; description: string; type: number; urgency: number; category: number };
 export type GlpiCreationOperation = { payload: GlpiCreateInput; createdAt: string; ticket?: GlpiTicket };
 export type GlpiUncertainRequest = GlpiCreationOperation;
