@@ -1,5 +1,12 @@
 # Versions de Sumatoni Time
 
+## 0.4.5 — 21 octobre 2026
+
+- Promotion de la version de développement validée : titres GLPI conservés, visibles et recherchables dans les prestations.
+- Relevé client anonyme enrichi du numéro, du titre et de la durée facturable.
+- Récupération explicite et sécurisée des titres historiques. Migration additive 0012 ; données et configuration existantes conservées.
+
+
 ## 0.4.5-dev.1 — 21 octobre 2026 — Développement uniquement
 
 - Titres GLPI vérifiés conservés avec les prestations et chronos ; corrections possibles hors ligne sans perdre le titre.
