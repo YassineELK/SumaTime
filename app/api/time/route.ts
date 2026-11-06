@@ -4,6 +4,7 @@ import { amountCents, serviceAmount } from '@/lib/pricing';
 import { database } from '@/db/raw';
 import { billedMinutes, brusselsToday, clockTime, csv, locationLabel, parseTime, validDate } from '@/lib/business';
 import type { Member, Entry } from '@/lib/types';
+import { exportFilename, type ExportKind } from '@/lib/export-filename';
 import { clientStatement } from '@/lib/client-export';
 import { partnerStatement } from '@/lib/partner-export';
 import { visibleEntry, providerRateColumn } from '@/lib/entry-visibility';
@@ -66,6 +67,8 @@ export async function GET(request: Request) {
       if (!['detail', 'summary', 'client', 'partner'].includes(kind || '')) throw new HttpError('Format d’export non reconnu.');
       const summary = kind === 'summary';
       const clientExport = kind === 'client';
+      const selectedClient = url.searchParams.get('client') ? await db.prepare('SELECT name FROM clients WHERE id=?').bind(url.searchParams.get('client')!).first<{name: string}>() : null;
+      let partnerName: string | undefined;
       let table: unknown[][];
       if (kind === 'partner') {
         const partnerId = url.searchParams.get('member') || (member.role === 'admin' ? '' : member.id);
@@ -75,10 +78,11 @@ export async function GET(request: Request) {
         if (!partner) throw new HttpError('Prestataire introuvable.', 404);
         if (url.searchParams.get('status') || url.searchParams.get('q')?.trim()) throw new HttpError('Pour contrôler la facture du prestataire, choisissez Tous les statuts et videz la recherche, puis cliquez sur Appliquer. Cela permet de compter tous les déplacements de la période.');
         if (!rows.length) throw new HttpError('Aucune prestation pour ce prestataire sur la période sélectionnée.');
+        partnerName = partner.name;
         table = partnerStatement(rows, partner.name);
       } else if (clientExport) {
         const clientId = url.searchParams.get('client');
-        if (!clientId || !await db.prepare('SELECT id FROM clients WHERE id=?').bind(clientId).first()) throw new HttpError('Sélectionnez un client et appliquez les filtres avant de télécharger son relevé.');
+        if (!clientId || !selectedClient) throw new HttpError('Sélectionnez un client et appliquez les filtres avant de télécharger son relevé.');
         if (rows.some(row => row.on_site === null)) throw new HttpError('Certaines prestations anciennes ont un mode à confirmer. Indiquez À distance ou Sur site avant l’export client.');
         table = clientStatement(rows);
       } else if (summary) {
@@ -97,7 +101,7 @@ export async function GET(request: Request) {
         const rate = (e: Entry) => member.role === 'admin' ? e.hourly_rate_cents : e.provider_rate_cents ?? null;
         table = [['ID', 'Client', 'Ticket', 'Source ticket', 'Prestataire', 'Date', 'Début', 'Fin', 'Description', 'Minutes réelles', 'Minutes facturables', 'Heures facturables', 'Statut', 'Mode de prestation', member.role === 'admin' ? 'Tarif horaire EUR' : 'Tarif prestataire EUR HT', member.role === 'admin' ? 'Montant prestations EUR' : 'Montant prestataire EUR HT', 'Déplacement compté', 'Forfait prestataire EUR'], ...rows.map(e => [e.id, e.client, e.ticket, e.ticket_source === 'glpi' ? 'GLPI vérifié' : e.ticket_source === 'pending' ? PENDING_TICKET_LABEL : 'Historique', e.member, e.date, clockTime(e.start), clockTime(e.end), e.description, e.end - e.start, billedMinutes(e.start, e.end), (billedMinutes(e.start, e.end) / 60).toFixed(2).replace('.', ','), e.billed ? 'Facturé' : 'À facturer', locationLabel(e.on_site), rate(e) === null ? '' : (rate(e)! / 100).toFixed(2).replace('.', ','), serviceAmount(e.start, e.end, rate(e)) === null ? '' : (serviceAmount(e.start, e.end, rate(e))! / 100).toFixed(2).replace('.', ','), e.travel_counted ? 'Oui' : 'Non', e.travel_cents === null ? '' : (e.travel_cents / 100).toFixed(2).replace('.', ',')])];
       }
-      return new Response(csv(table), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="sumatoni-${kind === 'partner' ? 'releve-prestataire' : clientExport ? 'releve-client' : summary ? 'synthese' : 'detail'}-${from}-${to}.csv"`, 'Cache-Control': 'no-store' } });
+      return new Response(csv(table), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${exportFilename({kind: kind as ExportKind, from, to, clientName: selectedClient?.name, partnerName})}"`, 'Cache-Control': 'no-store' } });
     }
     const [clients, members] = await Promise.all([
       db.prepare(member.role === 'admin' ? 'SELECT * FROM clients ORDER BY active DESC, name COLLATE NOCASE' : 'SELECT id,name,active,color,glpi_entity_id,NULL AS hourly_rate_cents,NULL AS onsite_hourly_rate_cents FROM clients ORDER BY active DESC,name COLLATE NOCASE').all(),

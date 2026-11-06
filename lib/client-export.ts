@@ -5,5 +5,5 @@ import { ticketTitleLabel } from './ticket-title';
 export function clientStatement(rows: Entry[]): unknown[][] {
   return [['Date', 'Début', 'Fin', 'Durée facturable (heures)', 'Mode de prestation', 'N° de ticket', 'Intitulé du ticket'],
     ...[...rows].sort((a,b) => a.date.localeCompare(b.date) || a.start-b.start || a.end-b.end).map(e =>
-      [e.date, clockTime(e.start), clockTime(e.end), billedMinutes(e.start,e.end) / 60, locationLabel(e.on_site), e.ticket, ticketTitleLabel(e)])];
+      [e.date, clockTime(e.start), clockTime(e.end), (billedMinutes(e.start,e.end) / 60).toFixed(2).replace('.', ','), locationLabel(e.on_site), e.ticket, ticketTitleLabel(e)])];
 }

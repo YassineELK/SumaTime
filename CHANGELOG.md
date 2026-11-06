@@ -1,5 +1,13 @@
 # Versions de Sumatoni Time
 
+## 0.4.7-dev.1 — 6 novembre 2026 — Développement uniquement
+
+- Noms CSV incluant le client et la période ; le navigateur respecte le nom généré par le serveur.
+- Durées du relevé client en heures décimales avec virgule, adaptées à un tableur en français ; séparateur `;` et anonymisation conservés.
+- Répartition discrète des heures facturables sur site/à distance dans Prestations, avec modes inconnus isolés.
+- Aucun changement des prestations, prix, statuts de facturation ou règles d'arrondi. Aucune mise en production.
+
+
 ## 0.4.6 — 6 novembre 2026
 
 - Promotion de la préversion validée : facturation en lot avec confirmation et transaction atomique, relevé pleine largeur et modification en fenêtre superposée.
