@@ -1,5 +1,13 @@
 # Versions de Sumatoni Time
 
+## 0.4.6-dev.2 — 6 novembre 2026 — Développement uniquement
+
+- Prestations : relevé sur toute la largeur, sans formulaire permanent ; modification dans une fenêtre superposée avec conservation des filtres.
+- Administrateurs : sélection par ligne, page ou ensemble filtré ; confirmation du marquage facturé en lot, versions vérifiées et transaction atomique.
+- Sélections et limites explicites, actions bloquées pour les filtres non appliqués ; commandes absentes pour les prestataires.
+- Dernière mention géographique en majuscules retirée de la barre latérale. Ajustements d'export décimal de la préversion précédente conservés.
+
+
 ## 0.4.6-dev.1 — Prochaine version, développement uniquement
 
 - Retrait des mentions géographiques de fuseau dans les formulaires, le calendrier et le guide utilisateur.

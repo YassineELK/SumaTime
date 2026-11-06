@@ -55,3 +55,11 @@
 .entry-details .ticket-title{display:block;margin-top:3px;font-size:13px;font-weight:500;line-height:1.45;color:var(--ink);white-space:normal;overflow-wrap:anywhere}
 
 .ticket-title-recovery{padding:0 22px 16px}.ticket-title-recovery .fine{margin:8px 0;font-size:12px}.ticket-title-recovery .alert{margin-top:10px}.ticket-title-recovery .secondary{white-space:normal;text-align:left}
+
+.ledger-layout{display:block;min-width:0}.ledger-layout .ledger{width:100%}
+.billing-toolbar{padding:18px 24px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--surface,#f6fbfd);display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between}
+.billing-toolbar strong{font-size:14px}.billing-toolbar p{font-size:12px;margin-top:5px;max-width:650px}.billing-toolbar-actions,.billing-confirm-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.billing-confirm-actions{justify-content:flex-end;margin-top:16px}
+input.billing-checkbox{width:18px;height:18px;min-height:18px;padding:0;margin:3px 12px 0 0;accent-color:var(--accent);cursor:pointer}
+.entry-row.selectable,.list-head.selectable{grid-template-columns:32px minmax(0,1fr) 165px 135px;column-gap:8px}.entry-row.selected{background:#eaf7fc}.entry-row.selectable>.billing-checkbox{grid-row:1 / span 2}
+.entry-editor-dialog{max-width:620px!important;max-height:90dvh;overflow-y:auto}.entry-editor-dialog .entry-form{padding:0}.entry-editor-dialog .entry-form>label{margin-bottom:17px}.billing-confirm-dialog{max-width:620px!important}
+@media(max-width:760px){.billing-toolbar{padding:16px}.billing-toolbar-actions{width:100%}.billing-toolbar-actions .primary{width:100%}.entry-row.selectable{grid-template-columns:24px minmax(0,1fr) 112px;column-gap:6px}.entry-row.selectable .entry-status{grid-column:2 / -1;justify-self:stretch}.entry-row.selectable .entry-status .row-actions{margin-left:auto}.list-head.selectable{grid-template-columns:24px minmax(0,1fr) 112px}.list-head.selectable>span:last-child{display:none}.entry-editor-dialog{max-width:calc(100vw - 24px)!important}}
