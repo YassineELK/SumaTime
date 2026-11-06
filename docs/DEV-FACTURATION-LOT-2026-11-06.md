@@ -21,3 +21,9 @@ Une transaction vérifie à nouveau les droits de l'acteur et toutes les version
 Tests unitaires de validation, atomicité, conflits, droits révoqués et panne sur une écriture intermédiaire. Tests du véritable composant Workspace : absence de formulaire permanent, ouverture/annulation/erreur de l'overlay, sauvegarde avec filtres conservés, sélection de page et multi-pages, exclusion des lignes verrouillées, confirmation, filtres non appliqués et absence des commandes pour un prestataire.
 
 Résultats : 66 tests unitaires/DOM (incluant calendrier, chrono, confidentialité, comptes et Entra), 25 assertions API du marquage en lot, 201 assertions API métier, 255 prestataire/GLPI et 77 de confidentialité/rémunération. Build/TypeScript, ESLint ciblé et diff Git conformes. Toutes les recettes ont utilisé des bases séparées ; aucune prestation réelle de développement ou de production n'est marquée par ces tests.
+
+## Prévisualisation installée
+
+Disponible sur http://192.168.10.131:5174 : version `0.4.6-dev.2`, code `4749e915ccbb6e4b6326a772ca9447d95a75bf5a`, build `nPseQcoLmLK4K_5vplFdH`. Les 3154 fichiers runtime ont été vérifiés et les 40 ressources publiques correspondent au paquet servi. L'API de facturation refuse les appels anonymes (401).
+
+Sauvegarde/preuves privées : `/var/backups/sumatime-preview/billing-ledger-20261106`. Comparaison intégrale des 21 tables avant/après : toutes les valeurs conservées, 2 membres/comptes, 2 clients et 8 prestations. Environnement et clé GLPI inchangés ; aucun changement de schéma, aucun marquage des prestations existantes pendant la vérification. La production n'a pas été contactée ni modifiée pour ce développement.

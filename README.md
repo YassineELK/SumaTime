@@ -54,3 +54,7 @@ Les fonctions de titres GLPI et d'export client enrichi ont été publiées apr�
 ### Prochaine version de développement : 0.4.6-dev.1
 
 Prévisualisation CT-ANT : mentions géographiques de fuseau retirées de l'interface, export client en heures décimales (`1.5` pour 1 h 30). Arrondi par prestation et données conservés. Voir [les changements et validations](docs/DEV-AFFICHAGE-EXPORT-2026-10-21.md). Cette préparation n'a pas été déployée en production.
+
+### Prévisualisation 0.4.6-dev.2 — 6 novembre 2026
+
+Prestations présente désormais le relevé sur toute la largeur ; le crayon ouvre une fenêtre de modification. Les administrateurs peuvent sélectionner des lignes, une page ou toutes les prestations non facturées filtrées, puis confirmer le marquage en lot. Les conflits annulent tout le lot. Les ajustements d'export décimal précédents sont conservés. Voir [le parcours et les validations](docs/DEV-FACTURATION-LOT-2026-11-06.md). Disponible en prévisualisation sur CT-ANT uniquement ; aucune mise en production.
