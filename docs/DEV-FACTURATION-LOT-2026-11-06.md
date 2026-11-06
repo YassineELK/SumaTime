@@ -27,3 +27,7 @@ Résultats : 66 tests unitaires/DOM (incluant calendrier, chrono, confidentialit
 Disponible sur http://192.168.10.131:5174 : version `0.4.6-dev.2`, code `4749e915ccbb6e4b6326a772ca9447d95a75bf5a`, build `nPseQcoLmLK4K_5vplFdH`. Les 3154 fichiers runtime ont été vérifiés et les 40 ressources publiques correspondent au paquet servi. L'API de facturation refuse les appels anonymes (401).
 
 Sauvegarde/preuves privées : `/var/backups/sumatime-preview/billing-ledger-20261106`. Comparaison intégrale des 21 tables avant/après : toutes les valeurs conservées, 2 membres/comptes, 2 clients et 8 prestations. Environnement et clé GLPI inchangés ; aucun changement de schéma, aucun marquage des prestations existantes pendant la vérification. La production n'a pas été contactée ni modifiée pour ce développement.
+
+## Promotion validée
+
+Après autorisation explicite du propriétaire, les fonctions ont été publiées en version stable **0.4.6** le 6 novembre 2026, avec sauvegardes avant/après et conservation vérifiée des données réelles. Voir [le compte rendu de production](DEPLOIEMENT-V0.4.6-2026-11-06.md). La prévisualisation reste indépendante.

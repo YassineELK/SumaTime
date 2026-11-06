@@ -58,3 +58,7 @@ Prévisualisation CT-ANT : mentions géographiques de fuseau retirées de l'inte
 ### Prévisualisation 0.4.6-dev.2 — 6 novembre 2026
 
 Prestations présente désormais le relevé sur toute la largeur ; le crayon ouvre une fenêtre de modification. Les administrateurs peuvent sélectionner des lignes, une page ou toutes les prestations non facturées filtrées, puis confirmer le marquage en lot. Les conflits annulent tout le lot. Les ajustements d'export décimal précédents sont conservés. Voir [le parcours et les validations](docs/DEV-FACTURATION-LOT-2026-11-06.md). Disponible en prévisualisation sur CT-ANT uniquement ; aucune mise en production.
+
+### Production v0.4.6 — 6 novembre 2026
+
+Facturation en lot réservée aux administrateurs, relevé pleine largeur et édition en fenêtre superposée publiés après validation. Le CSV client utilise les heures décimales. Sauvegardes avant/après contrôlées ; données et statuts existants conservés. Voir [le compte rendu de déploiement](docs/DEPLOIEMENT-V0.4.6-2026-11-06.md).
