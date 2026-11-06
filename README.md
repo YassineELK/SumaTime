@@ -62,3 +62,7 @@ Prestations présente désormais le relevé sur toute la largeur ; le crayon ouv
 ### Production v0.4.6 — 6 novembre 2026
 
 Facturation en lot réservée aux administrateurs, relevé pleine largeur et édition en fenêtre superposée publiés après validation. Le CSV client utilise les heures décimales. Sauvegardes avant/après contrôlées ; données et statuts existants conservés. Voir [le compte rendu de déploiement](docs/DEPLOIEMENT-V0.4.6-2026-11-06.md).
+
+### Prévisualisation 0.4.7-dev.1 — 6 novembre 2026
+
+CSV nommé d'après le client et la période, heures décimales avec virgule pour les tableurs en français, et petite répartition des heures facturables sur site/à distance dans Prestations. Voir [les règles et validations](docs/DEV-EXPORT-REPARTITION-2026-11-06.md). Disponible en développement uniquement sur CT-ANT ; aucune mise en production.
