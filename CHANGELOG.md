@@ -1,5 +1,12 @@
 # Versions de Sumatoni Time
 
+## 0.4.6 — 6 novembre 2026
+
+- Promotion de la préversion validée : facturation en lot avec confirmation et transaction atomique, relevé pleine largeur et modification en fenêtre superposée.
+- Export client en heures décimales et retrait des mentions géographiques de l'interface.
+- Aucun changement de schéma ni de données lors de l'installation ; configuration et accès existants conservés.
+
+
 ## 0.4.6-dev.2 — 6 novembre 2026 — Développement uniquement
 
 - Prestations : relevé sur toute la largeur, sans formulaire permanent ; modification dans une fenêtre superposée avec conservation des filtres.
